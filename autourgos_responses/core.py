@@ -3,116 +3,38 @@ OpenAI Responses API helpers for autourgos-responses.
 
 All utilities needed to configure clients, build Responses API request params,
 handle multi-modal input, and parse streaming deltas.
+
+The generic, byte-for-byte-identical helpers (module loading, API key/base
+URL resolution, client construction/release, model name normalization) are
+no longer duplicated here — they are re-exported from
+``autourgos_openaichat.core`` so existing local imports
+(``from .core import resolve_api_key`` etc.) keep working unchanged.
+Responses-API-specific logic (reasoning/text config, multi-modal prompt
+building, params building, streaming delta extraction) stays local because
+it differs from the Chat Completions equivalents.
 """
 
 from __future__ import annotations
 
 import base64
 import logging
-import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger("autourgos_responses")
+from autourgos_openaichat.core import (
+    configure_async_openai_client,
+    configure_openai_client,
+    load_openai_module,
+    normalize_model_name,
+    release_async_openai_client,
+    release_openai_client,
+    resolve_api_key,
+    resolve_base_url,
+)
 
-# ── Module loading ────────────────────────────────────────────────────────────
-
-def load_openai_module() -> Tuple[bool, Any, Any, Optional[str]]:
-    """Try to import the openai package. Returns (available, OpenAI, AsyncOpenAI, error)."""
-    try:
-        import openai as _openai
-        return True, _openai.OpenAI, _openai.AsyncOpenAI, None
-    except ImportError as exc:
-        return False, None, None, str(exc)
-
-
-# ── Key / URL resolution ──────────────────────────────────────────────────────
-
-def resolve_api_key(api_key: Optional[str]) -> Optional[str]:
-    return api_key or os.environ.get("OPENAI_API_KEY")
-
-
-def resolve_base_url(base_url: Optional[str]) -> Optional[str]:
-    return base_url or os.environ.get("OPENAI_BASE_URL")
-
-
-# ── Client helpers ────────────────────────────────────────────────────────────
-
-def configure_openai_client(
-    openai_cls: Any,
-    *,
-    api_key: Optional[str],
-    base_url: Optional[str],
-    organization: Optional[str],
-    project: Optional[str],
-    timeout: Optional[float],
-) -> Any:
-    kwargs: Dict[str, Any] = {}
-    if api_key:
-        kwargs["api_key"] = api_key
-    if base_url:
-        kwargs["base_url"] = base_url
-    if organization:
-        kwargs["organization"] = organization
-    if project:
-        kwargs["project"] = project
-    if timeout is not None:
-        kwargs["timeout"] = timeout
-    return openai_cls(**kwargs)
-
-
-def configure_async_openai_client(
-    async_openai_cls: Any,
-    *,
-    api_key: Optional[str],
-    base_url: Optional[str],
-    organization: Optional[str],
-    project: Optional[str],
-    timeout: Optional[float],
-) -> Any:
-    kwargs: Dict[str, Any] = {}
-    if api_key:
-        kwargs["api_key"] = api_key
-    if base_url:
-        kwargs["base_url"] = base_url
-    if organization:
-        kwargs["organization"] = organization
-    if project:
-        kwargs["project"] = project
-    if timeout is not None:
-        kwargs["timeout"] = timeout
-    return async_openai_cls(**kwargs)
-
-
-def release_openai_client(client: Any) -> None:
-    closer = getattr(client, "close", None)
-    if callable(closer):
-        try:
-            closer()
-        except Exception:
-            pass
-
-
-async def release_async_openai_client(client: Any) -> None:
-    acloser = getattr(client, "aclose", None)
-    if callable(acloser):
-        try:
-            await acloser()
-        except Exception:
-            pass
-        return
-    closer = getattr(client, "close", None)
-    if callable(closer):
-        try:
-            closer()
-        except Exception:
-            pass
-
-
-# ── Model name normalization ──────────────────────────────────────────────────
-
-def normalize_model_name(model: str) -> str:
-    return model.strip().lower() if model else model
-
+# Kept local (not re-exported): the logger name is package-specific, so
+# reusing openaichat's logger object would silently change the effective
+# logger name used for autourgos-responses log records.
+logger = logging.getLogger(__name__)
 
 # ── Reasoning / text config ───────────────────────────────────────────────────
 

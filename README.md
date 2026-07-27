@@ -2,7 +2,7 @@
 
 LLM wrapper for the **OpenAI Responses API** (`client.responses.create`), part of the [Autourgos](https://github.com/devxjitin) framework.
 
-Fully self-contained — no `autourgos-core` dependency required. Just `pip install openai` and you are ready.
+No `autourgos-core` dependency required. As of v2.0.0, this package depends on `autourgos-openaichat` (which brings in the shared LLM base layer — `BaseLLM`, circuit breaker, etc.) in addition to `openai`. Just `pip install autourgos-responses` and you are ready.
 
 The Responses API is OpenAI's newer, stateful endpoint that supports reasoning models (`o3`, `o3-mini`, `o1`), built-in tools, and multi-turn input natively.
 
@@ -318,6 +318,8 @@ for name, cfg in PROVIDERS.items():
 ---
 
 ## Quick Start
+
+Set the `OPENAI_API_KEY` environment variable first, or pass `api_key=` directly.
 
 ```python
 from autourgos_responses import OpenAIResponse

@@ -1,31 +1,26 @@
 """
 Shared model runtime helpers for autourgos-responses.
 
-Self-contained: no autourgos-core dependency.
+``track_latency``, ``extract_template_fields``, ``coerce_prompt_variable``,
+and ``configure_runtime_environment`` are byte-for-byte identical to the
+autourgos-openaichat versions and are re-exported from there instead of
+being duplicated. ``extract_usage_metadata``, ``extract_text_from_response``,
+and ``build_structured_output`` stay local: the first two have different
+field-priority ordering for the Responses API, and ``build_structured_output``
+internally calls the local ``extract_usage_metadata``, so importing it from
+openaichat would silently change its behavior.
 """
 
 from __future__ import annotations
 
-import os
-import warnings
-from contextlib import contextmanager
-from string import Formatter
-from typing import Any, Dict, Iterator, Optional
-import time
+from typing import Any, Dict, Optional
 
-
-# ── Latency tracking ──────────────────────────────────────────────────────────
-
-@contextmanager
-def track_latency() -> Iterator[Dict[str, float]]:
-    """Record elapsed wall-clock milliseconds."""
-    timing: Dict[str, float] = {"latency_ms": 0.0}
-    start = time.perf_counter()
-    try:
-        yield timing
-    finally:
-        timing["latency_ms"] = round((time.perf_counter() - start) * 1000, 2)
-
+from autourgos_openaichat.model_runtime import (
+    coerce_prompt_variable,
+    configure_runtime_environment,
+    extract_template_fields,
+    track_latency,
+)
 
 # ── Token/usage extraction ────────────────────────────────────────────────────
 
@@ -139,35 +134,6 @@ def extract_text_from_response(resp: Any) -> Optional[str]:
                 return val
 
     return None
-
-
-# ── Template helpers ──────────────────────────────────────────────────────────
-
-def extract_template_fields(template: str) -> set:
-    """Return the set of {placeholder} names in a format string."""
-    fields: set = set()
-    for _, field_name, _, _ in Formatter().parse(template):
-        if not field_name:
-            continue
-        base = field_name.split("!", 1)[0].split(":", 1)[0].strip()
-        if base:
-            fields.add(base)
-    return fields
-
-
-def coerce_prompt_variable(value: Any) -> str:
-    """Coerce a prompt variable to string."""
-    return "" if value is None else str(value)
-
-
-# ── Process-level runtime setup ───────────────────────────────────────────────
-
-def configure_runtime_environment() -> None:
-    """Suppress noisy SDK diagnostics."""
-    os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
-    os.environ.setdefault("GLOG_minloglevel", "2")
-    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
-    warnings.filterwarnings("ignore", category=UserWarning, module=".*grpc.*")
 
 
 __all__ = [
