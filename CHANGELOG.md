@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.3] - 2026-08-29
+
+- Docs: added contributor badges (Sonia, Vishwanil Suman) to README, matching `autourgos-openaichat`. No functional changes.
+
 ## [2.0.2] - 2026-08-29
 
 - Changed (breaking): relicensed from MIT to Apache License 2.0 — adds an explicit patent grant and patent-retaliation clause, matching `autourgos-openaichat`. `LICENSE` and `pyproject.toml` classifiers updated accordingly.
