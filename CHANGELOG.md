@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.2] - 2026-08-29
+
+- Changed (breaking): relicensed from MIT to Apache License 2.0 — adds an explicit patent grant and patent-retaliation clause, matching `autourgos-openaichat`. `LICENSE` and `pyproject.toml` classifiers updated accordingly.
+- Changed (breaking): `OpenAIResponse` constructor params renamed to match `autourgos-openaichat` — `system_instruction` -> `system_prompt`, `response_schema` -> `output_schema`. No backward-compat aliases; callers on the old names must update.
+- Fixed: retry logic no longer retries on non-retryable client errors (HTTP 400/401/403/404/422) in the request and streaming paths (sync + async) — these now fail immediately instead of burning the full retry budget with exponential backoff.
+- Fixed: `output_schema` was broken for structured output — `text.format` was nested under a `json_schema` key (the Chat Completions shape); the Responses API expects it flat. Also now enforces `additionalProperties: false` for strict json_schema mode, same as `autourgos-openaichat`.
+- Fixed: `text_verbosity` accepted `{"concise","detailed","auto"}`, which the real API always rejected with a 400; corrected to the actual accepted values `{"low","medium","high"}`.
+- Fixed: multi-modal `files=` input was structurally invalid — content parts were passed directly as `input` instead of wrapped in a `{"role": "user", "content": [...]}` message item, which the Responses API requires. Vision input was previously unusable.
+- Docs: rewrote README.md to match `autourgos-openaichat`'s structure — badges, Features summary, Supported Providers table, full per-provider examples (added Google Gemini, xAI Grok, and OpenRouter, previously missing), reorganized under one Core Usage section with a matching Table of Contents.
+- All fixes verified live against a real Azure OpenAI deployment.
+
 ## [2.0.1] - 2026-07-27
 
 - Fixed: standardized logger to logging.getLogger(__name__). Docs: Quick Start now notes OPENAI_API_KEY.

@@ -1,60 +1,81 @@
 # autourgos-responses
 
-LLM wrapper for the **OpenAI Responses API** (`client.responses.create`), part of the [Autourgos](https://github.com/devxjitin) framework.
+[![Framework: Autourgos](https://img.shields.io/badge/Framework-Autourgos-orange.svg)](https://github.com/devxjitin)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://pypi.org/project/autourgos-responses/)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://github.com/devxjitin/autourgos-responses/blob/main/LICENSE)
+[![Author](https://img.shields.io/badge/Author-Jitin%20Kumar%20Sengar-blue.svg)](https://github.com/devxjitin)
 
-No `autourgos-core` dependency required. As of v2.0.0, this package depends on `autourgos-openaichat` (which brings in the shared LLM base layer — `BaseLLM`, circuit breaker, etc.) in addition to `openai`. Just `pip install autourgos-responses` and you are ready.
+A single, self-contained LLM wrapper for the **OpenAI Responses API** (`client.responses.create`), and by extension every provider that speaks the same protocol (Groq, Gemini, Azure, Ollama, and more). Part of the [Autourgos](https://github.com/devxjitin) agentic-AI framework. Depends on `autourgos-openaichat` for the shared base layer (`BaseLLM`, circuit breaker) in addition to `openai`.
 
-The Responses API is OpenAI's newer, stateful endpoint that supports reasoning models (`o3`, `o3-mini`, `o1`), built-in tools, and multi-turn input natively.
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(model="gpt-4o")           # reads OPENAI_API_KEY
+reply = llm.invoke("What is the capital of France?")
+print(reply)
+# Paris
+```
 
 ---
 
-## Why use this?
+## Features
 
-Almost every major LLM provider today — Groq, Together AI, Mistral, Perplexity, DeepSeek, Ollama, LM Studio, vLLM, Azure OpenAI — exposes an **OpenAI-compatible API**. This means they all accept the same request format.
-
-`autourgos-responses` takes advantage of this. You set `base_url` to any provider's endpoint and `model` to whatever model they offer. **One package, any LLM.** You never have to learn a new SDK or rewrite your code when you switch providers.
-
-The Responses API gives you extra power on top: native reasoning models (`o3`, `o3-mini`, `o1`) with configurable thinking effort, text verbosity control, and cleaner multi-turn conversation handling.
-
-```
-OpenAI (gpt-4o, o3, o3-mini, o1) ──────────┐
-Groq (Llama, Mixtral, Gemma) ───────────────┤
-Together AI (70B, 8x7B, ...) ───────────────┤  autourgos-responses
-Mistral AI (mistral-large, ...) ────────────┤  (one interface)
-DeepSeek (deepseek-chat, ...) ──────────────┤
-Perplexity (sonar models) ──────────────────┤
-Ollama — any local model ───────────────────┤
-LM Studio — any local model ────────────────┤
-vLLM — self-hosted ─────────────────────────┤
-Azure OpenAI ───────────────────────────────┘
-```
+- **One interface, any OpenAI-compatible provider**: OpenAI, Azure, Groq, Gemini, Mistral, DeepSeek, Ollama, and more, switched with just `base_url` + `model`
+- Native reasoning models (`o3`, `o3-mini`, `o1`) with configurable `reasoning_effort` and `reasoning_summary`
+- Text verbosity control (`text_verbosity`)
+- Sync and async generation, plus streaming for both
+- Structured output validated against a Pydantic model, or plain JSON mode
+- Multi-modal vision input: file paths, URLs, or raw bytes
+- Prompt templates with `{placeholder}` variables
+- Multi-turn conversations via `chat()` / `achat()`, or a plain message list as input
+- Automatic retries with exponential back-off (skips non-retryable 4xx errors), plus a circuit breaker for cascading-failure protection
+- Built-in cost and latency tracking
+- Fully typed (`py.typed`), sync/async context managers, low-level raw-response access
 
 ---
 
 ## Table of Contents
 
 - [Install](#install)
-- [Works With Any LLM](#works-with-any-llm)
-- [Quick Start](#quick-start)
-- [Basic Text Generation](#basic-text-generation)
-- [Async Generation](#async-generation)
-- [Streaming](#streaming)
-- [Async Streaming](#async-streaming)
-- [Batch Invocation](#batch-invocation)
-- [System Instruction](#system-instruction)
-- [Prompt Templates](#prompt-templates)
-- [Reasoning Models](#reasoning-models)
-- [Multi-Modal Vision Input](#multi-modal-vision-input)
-- [Structured Output](#structured-output)
-- [JSON Mode](#json-mode)
-- [Multi-Turn Chat](#multi-turn-chat)
-- [Cost Tracking](#cost-tracking)
-- [Context Manager](#context-manager)
-- [Circuit Breaker](#circuit-breaker)
-- [Error Handling](#error-handling)
+- [Supported Providers](#supported-providers)
+- [Provider Examples](#provider-examples)
+  - [OpenAI](#openai)
+  - [OpenAI Reasoning Models](#openai-reasoning-models)
+  - [Azure OpenAI](#azure-openai)
+  - [Google Gemini](#google-gemini)
+  - [Groq](#groq-fastest-inference-free-tier-available)
+  - [xAI (Grok)](#xai-grok)
+  - [OpenRouter](#openrouter-one-key-hundreds-of-models)
+  - [Together AI](#together-ai-wide-model-selection)
+  - [Mistral AI](#mistral-ai)
+  - [DeepSeek](#deepseek)
+  - [Perplexity](#perplexity-web-connected-models)
+  - [Ollama](#ollama-run-any-model-locally-no-internet-needed)
+  - [LM Studio](#lm-studio-local-models-with-a-gui)
+  - [vLLM](#vllm-self-hosted-high-throughput-serving)
+  - [Switching providers at runtime](#switching-providers-at-runtime)
+- [Core Usage](#core-usage)
+  - [Text Generation](#text-generation)
+  - [Async Generation](#async-generation)
+  - [Streaming](#streaming)
+  - [Async Streaming](#async-streaming)
+  - [Batch Invocation](#batch-invocation)
+  - [System Prompt](#system-prompt)
+  - [Prompt Templates](#prompt-templates)
+  - [Reasoning Models](#reasoning-models)
+  - [Vision Input](#vision-input)
+  - [Structured Output](#structured-output)
+  - [JSON Mode](#json-mode)
+  - [Multi-Turn Chat](#multi-turn-chat)
+  - [Cost Tracking](#cost-tracking)
+  - [Context Manager](#context-manager)
+  - [Circuit Breaker](#circuit-breaker)
+  - [Low-Level Access](#low-level-access)
+  - [Error Handling](#error-handling)
 - [Constructor Reference](#constructor-reference)
-- [What Each Method Returns](#what-each-method-returns)
+- [API Reference](#api-reference)
 - [Differences vs autourgos-openaichat](#differences-vs-autourgos-openaichat)
+- [License](#license)
 
 ---
 
@@ -64,15 +85,41 @@ Azure OpenAI ──────────────────────�
 pip install autourgos-responses
 ```
 
-Requires Python 3.10+ and `openai>=1.0.0`.
+Requires Python 3.10+ and `openai>=1.0.0`. Structured output (`output_schema=`) additionally needs `pydantic>=2.0` if you use it.
 
 ---
 
-## Works With Any LLM
+## Supported Providers
 
-All you need to switch providers is `base_url` and the right model name. Your API key comes from the provider you choose.
+Almost every major LLM provider exposes an **OpenAI-compatible API**: same request format as OpenAI's Responses endpoint. Point `base_url` at the provider and `model` at whatever they offer; nothing else changes.
 
-### OpenAI (default)
+| Provider | `base_url` | Get a key |
+|---|---|---|
+| OpenAI | *(default, omit)* | https://platform.openai.com/api-keys |
+| Azure OpenAI | `https://<resource>.openai.azure.com/openai/deployments/<deployment>` | Azure Portal |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | https://aistudio.google.com/apikey |
+| Groq | `https://api.groq.com/openai/v1` | https://console.groq.com |
+| xAI (Grok) | `https://api.x.ai/v1` | https://console.x.ai |
+| OpenRouter | `https://openrouter.ai/api/v1` | https://openrouter.ai/keys |
+| Together AI | `https://api.together.xyz/v1` | https://api.together.xyz |
+| Mistral AI | `https://api.mistral.ai/v1` | https://console.mistral.ai |
+| DeepSeek | `https://api.deepseek.com/v1` | https://platform.deepseek.com |
+| Perplexity | `https://api.perplexity.ai` | https://www.perplexity.ai/settings/api |
+| Ollama (local) | `http://localhost:11434/v1` | none, runs on your machine |
+| LM Studio (local) | `http://localhost:1234/v1` | none, runs on your machine |
+| vLLM (self-hosted) | `http://your-server:8000/v1` | none, you host it |
+
+> Note: reasoning models (`o3`, `o3-mini`, `o1`) and `reasoning_effort`/`text_verbosity` are OpenAI-only features of the Responses API. Other providers accept the same `invoke`/`stream`/`chat` calls but ignore or reject those params.
+
+---
+
+## Provider Examples
+
+Every example below is the full, runnable snippet. Swap in your own key and go.
+
+### OpenAI
+
+The default provider. No `base_url` needed.
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -86,9 +133,9 @@ print(reply)
 # Paris
 ```
 
-### OpenAI reasoning models
+### OpenAI Reasoning Models
 
-These are special to OpenAI's Responses API. They support `reasoning_effort` to control how long the model thinks before answering.
+`o3`, `o3-mini`, and `o1` support `reasoning_effort` to control how long the model thinks before answering.
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -103,7 +150,45 @@ print(reply)
 # Assume for contradiction that √2 = p/q in lowest terms...
 ```
 
-### Groq — fastest inference, free tier available
+### Azure OpenAI
+
+Azure hosts OpenAI models in your own subscription. `model` is your **deployment name** in Azure, not the base model name. Get your endpoint and key from the Azure Portal.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(
+    model="gpt-4o",              # your deployment name in Azure
+    api_key="...",               # Azure OpenAI key
+    base_url="https://<your-resource>.openai.azure.com/openai/deployments/gpt-4o",
+)
+reply = llm.invoke("What is cloud computing?")
+print(reply)
+# Cloud computing is the delivery of computing services over the internet
+# (servers, storage, databases, networking, software) on a pay-as-you-go basis.
+```
+
+### Google Gemini
+
+Gemini exposes an OpenAI-compatible endpoint, so no separate Google SDK is needed. Get your key at https://aistudio.google.com/apikey.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(
+    model="gemini-2.0-flash",
+    api_key="...",               # Gemini API key
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+)
+reply = llm.invoke("Explain photosynthesis in one sentence.")
+print(reply)
+# Photosynthesis is the process by which plants convert sunlight, water, and
+# carbon dioxide into glucose and oxygen.
+```
+
+Other Gemini models: `gemini-2.0-flash-lite`, `gemini-1.5-pro`, `gemini-1.5-flash`.
+
+### Groq (fastest inference, free tier available)
 
 Groq runs open-source models (Llama 3, Mixtral, Gemma) at extremely high speed. Get your key at https://console.groq.com.
 
@@ -112,7 +197,7 @@ from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="llama3-70b-8192",
-    api_key="gsk_...",          # Groq API key
+    api_key="gsk_...",           # Groq API key
     base_url="https://api.groq.com/openai/v1",
 )
 reply = llm.invoke("Explain quantum entanglement simply.")
@@ -121,9 +206,44 @@ print(reply)
 # the state of one instantly affects the other, no matter how far apart they are.
 ```
 
-Other Groq models: `llama3-8b-8192`, `mixtral-8x7b-32768`, `gemma2-9b-it`
+Other Groq models: `llama3-8b-8192`, `mixtral-8x7b-32768`, `gemma2-9b-it`.
 
-### Together AI — wide model selection
+### xAI (Grok)
+
+Get your key at https://console.x.ai.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(
+    model="grok-2-latest",
+    api_key="xai-...",           # xAI API key
+    base_url="https://api.x.ai/v1",
+)
+reply = llm.invoke("What makes Mars red?")
+print(reply)
+# Mars appears red because its surface is covered in iron oxide (rust),
+# formed when iron in the soil reacted with trace oxygen long ago.
+```
+
+### OpenRouter (one key, hundreds of models)
+
+OpenRouter proxies dozens of providers (including Anthropic Claude and Google Gemini) behind a single OpenAI-compatible API and one API key. Get your key at https://openrouter.ai/keys.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(
+    model="anthropic/claude-3.5-sonnet",   # or "google/gemini-2.0-flash-001", "openai/gpt-4o", ...
+    api_key="sk-or-...",         # OpenRouter API key
+    base_url="https://openrouter.ai/api/v1",
+)
+reply = llm.invoke("Write a Python one-liner to reverse a string.")
+print(reply)
+# s[::-1]
+```
+
+### Together AI (wide model selection)
 
 Together AI hosts hundreds of open-source models. Get your key at https://api.together.xyz.
 
@@ -132,7 +252,7 @@ from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="meta-llama/Llama-3-70b-chat-hf",
-    api_key="...",              # Together AI key
+    api_key="...",                # Together AI key
     base_url="https://api.together.xyz/v1",
 )
 reply = llm.invoke("Write a Python function to check if a number is prime.")
@@ -146,7 +266,7 @@ print(reply)
 #     return True
 ```
 
-Other Together AI models: `mistralai/Mixtral-8x7B-Instruct-v0.1`, `Qwen/Qwen2-72B-Instruct`
+Other Together AI models: `mistralai/Mixtral-8x7B-Instruct-v0.1`, `Qwen/Qwen2-72B-Instruct`.
 
 ### Mistral AI
 
@@ -157,7 +277,7 @@ from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="mistral-large-latest",
-    api_key="...",              # Mistral API key
+    api_key="...",                # Mistral API key
     base_url="https://api.mistral.ai/v1",
 )
 reply = llm.invoke("What are the benefits of test-driven development?")
@@ -166,7 +286,7 @@ print(reply)
 # you confidence to refactor without breaking existing behaviour.
 ```
 
-Other Mistral models: `mistral-medium-latest`, `mistral-small-latest`, `open-mixtral-8x7b`
+Other Mistral models: `mistral-medium-latest`, `mistral-small-latest`, `open-mixtral-8x7b`.
 
 ### DeepSeek
 
@@ -177,7 +297,7 @@ from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="deepseek-chat",
-    api_key="...",              # DeepSeek API key
+    api_key="...",                # DeepSeek API key
     base_url="https://api.deepseek.com/v1",
 )
 reply = llm.invoke("What is a transformer neural network?")
@@ -187,9 +307,9 @@ print(reply)
 # NLP tasks like translation, summarisation, and text generation.
 ```
 
-Other DeepSeek models: `deepseek-reasoner`
+Other DeepSeek models: `deepseek-reasoner`.
 
-### Perplexity — web-connected models
+### Perplexity (web-connected models)
 
 Perplexity's Sonar models can search the web in real time. Get your key at https://www.perplexity.ai/settings/api.
 
@@ -198,15 +318,15 @@ from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="llama-3.1-sonar-large-128k-online",
-    api_key="pplx-...",        # Perplexity API key
+    api_key="pplx-...",           # Perplexity API key
     base_url="https://api.perplexity.ai",
 )
-reply = llm.invoke("What are the top AI news stories today?")
+reply = llm.invoke("What is the latest version of Python?")
 print(reply)
-# Today's top AI stories include...
+# Python 3.13.x is the latest stable release as of 2025...
 ```
 
-### Ollama — run any model locally, no internet needed
+### Ollama (run any model locally, no internet needed)
 
 Ollama runs models entirely on your machine. Install from https://ollama.com, then pull a model:
 
@@ -221,19 +341,18 @@ from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="llama3",
-    api_key="ollama",           # can be any string — Ollama ignores it
+    api_key="ollama",             # can be any string, Ollama ignores it
     base_url="http://localhost:11434/v1",
 )
-reply = llm.invoke("What is the difference between RAM and ROM?")
+reply = llm.invoke("What is machine learning?")
 print(reply)
-# RAM (Random Access Memory) is fast, temporary storage your computer uses
-# while running programs. ROM (Read-Only Memory) is permanent storage that
-# holds firmware your computer needs to boot up.
+# Machine learning is a subset of AI where algorithms learn patterns
+# from data to make predictions or decisions without explicit programming.
 ```
 
-Other Ollama models: `mistral`, `phi3`, `gemma2`, `codellama`, `qwen2` — anything you pull with `ollama pull`.
+Other Ollama models: `mistral`, `phi3`, `gemma2`, `codellama`, `qwen2`, and anything you pull with `ollama pull`.
 
-### LM Studio — local models with a GUI
+### LM Studio (local models with a GUI)
 
 LM Studio lets you download and run GGUF models locally. Start the local server in LM Studio, then:
 
@@ -241,24 +360,25 @@ LM Studio lets you download and run GGUF models locally. Start the local server 
 from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
-    model="local-model",        # use whatever model name LM Studio shows
-    api_key="lm-studio",        # any string — ignored locally
+    model="local-model",          # use whatever model name LM Studio shows
+    api_key="lm-studio",          # any string, ignored locally
     base_url="http://localhost:1234/v1",
 )
-reply = llm.invoke("Explain recursion in simple terms.")
+reply = llm.invoke("Tell me a short joke.")
 print(reply)
-# Recursion is when a function calls itself to solve a smaller version
-# of the same problem, until it reaches a base case that stops the loop.
+# Why do programmers prefer dark mode? Because light attracts bugs!
 ```
 
-### vLLM — self-hosted high-throughput serving
+### vLLM (self-hosted high-throughput serving)
+
+vLLM lets you host your own models with high throughput. After starting your vLLM server:
 
 ```python
 from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="meta-llama/Meta-Llama-3-8B-Instruct",
-    api_key="EMPTY",            # vLLM default when no auth is set
+    api_key="EMPTY",              # vLLM's default when no auth is configured
     base_url="http://your-server:8000/v1",
 )
 reply = llm.invoke("What is the capital of Japan?")
@@ -266,23 +386,9 @@ print(reply)
 # Tokyo
 ```
 
-### Azure OpenAI
-
-```python
-from autourgos_responses import OpenAIResponse
-
-llm = OpenAIResponse(
-    model="gpt-4o",             # your deployment name in Azure
-    api_key="...",              # Azure OpenAI key
-    base_url="https://<your-resource>.openai.azure.com/openai/deployments/gpt-4o",
-)
-reply = llm.invoke("What is cloud computing?")
-print(reply)
-# Cloud computing is the delivery of computing services over the internet
-# on a pay-as-you-go basis.
-```
-
 ### Switching providers at runtime
+
+Because all these providers use the same interface, switching is trivial:
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -298,10 +404,10 @@ PROVIDERS = {
         "api_key": "gsk_...",
         "base_url": "https://api.groq.com/openai/v1",
     },
-    "ollama": {
-        "model": "llama3",
-        "api_key": "ollama",
-        "base_url": "http://localhost:11434/v1",
+    "gemini": {
+        "model": "gemini-2.0-flash",
+        "api_key": "...",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
     },
 }
 
@@ -312,34 +418,21 @@ for name, cfg in PROVIDERS.items():
 
 # openai: Hello!
 # groq:   Hello!
-# ollama: Hello!
+# gemini: Hello!
 ```
 
 ---
 
-## Quick Start
+## Core Usage
 
-Set the `OPENAI_API_KEY` environment variable first, or pass `api_key=` directly.
-
-```python
-from autourgos_responses import OpenAIResponse
-
-llm = OpenAIResponse(model="gpt-4o")
-reply = llm.invoke("What is the capital of France?")
-print(reply)
-# Paris
-```
-
----
-
-## Basic Text Generation
+### Text Generation
 
 ```python
 from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="gpt-4o",
-    api_key="sk-...",        # or set OPENAI_API_KEY env var
+    api_key="sk-...",             # or set OPENAI_API_KEY env var
     temperature=0.7,
     max_tokens=256,
 )
@@ -350,9 +443,7 @@ print(reply)
 # to make predictions or decisions without being explicitly programmed.
 ```
 
----
-
-## Async Generation
+### Async Generation
 
 ```python
 import asyncio
@@ -368,11 +459,9 @@ async def main():
 asyncio.run(main())
 ```
 
----
+### Streaming
 
-## Streaming
-
-Stream the response token by token synchronously.
+Stream the response token by token, synchronously.
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -397,9 +486,7 @@ print(reply)
 # to rotate once but only 225 Earth days to orbit the Sun.
 ```
 
----
-
-## Async Streaming
+### Async Streaming
 
 ```python
 import asyncio
@@ -415,11 +502,9 @@ async def main():
 asyncio.run(main())
 ```
 
----
+### Batch Invocation
 
-## Batch Invocation
-
-### Synchronous (sequential)
+Synchronous (sequential):
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -441,7 +526,7 @@ for prompt, result in zip(prompts, results):
 # Capital of Brazil?  -> Brasilia
 ```
 
-### Async (concurrent)
+Async (concurrent):
 
 ```python
 import asyncio
@@ -461,9 +546,7 @@ async def main():
 asyncio.run(main())
 ```
 
----
-
-## System Instruction
+### System Prompt
 
 Set a persistent system prompt sent as the `instructions` field of every request.
 
@@ -472,18 +555,15 @@ from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="gpt-4o",
-    system_prompt="You are a concise assistant. Always reply in exactly one sentence.",
+    system_prompt="You are a pirate. Always respond in pirate speak.",
 )
 
-reply = llm.invoke("What is photosynthesis?")
+reply = llm.invoke("What time is it?")
 print(reply)
-# Photosynthesis is the process by which plants use sunlight, water, and CO2
-# to produce glucose and oxygen.
+# Arrr, I know not the exact hour, but the sun be high in the sky, matey!
 ```
 
----
-
-## Prompt Templates
+### Prompt Templates
 
 Define a reusable template with `{placeholders}` and fill them at call time.
 
@@ -513,24 +593,18 @@ llm.invoke(prompt_variables={"topic": "article"})
 # ValueError: Missing prompt template variables: content, num_words
 ```
 
----
-
-## Reasoning Models
+### Reasoning Models
 
 `o3`, `o3-mini`, and `o1` are OpenAI's reasoning models. They support `reasoning_effort` to control how long the model thinks before answering. Higher effort produces better answers for hard problems but takes longer and costs more.
 
-> Reasoning models are only available from OpenAI. When using other providers, omit `reasoning_effort`.
-
-### reasoning_effort
-
-Valid values: `"low"`, `"medium"`, `"high"`.
+> Reasoning models and `reasoning_effort`/`reasoning_summary`/`text_verbosity` are OpenAI-only. When using other providers, omit these params.
 
 ```python
 from autourgos_responses import OpenAIResponse
 
 # Low effort — fast, cheaper
 llm = OpenAIResponse(model="o3-mini", reasoning_effort="low")
-reply = llm.invoke("What is 17 × 23?")
+reply = llm.invoke("What is 17 x 23?")
 print(reply)
 # 391
 
@@ -538,18 +612,14 @@ print(reply)
 llm = OpenAIResponse(model="o3-mini", reasoning_effort="medium")
 reply = llm.invoke("Solve: if a train travels at 80 km/h for 2.5 hours, how far does it go?")
 print(reply)
-# The train travels 200 km. (80 km/h × 2.5 h = 200 km)
+# The train travels 200 km. (80 km/h x 2.5 h = 200 km)
 
 # High effort — most thorough, best for hard problems
 llm = OpenAIResponse(model="o3", reasoning_effort="high")
-reply = llm.invoke(
-    "Prove that the square root of 2 is irrational."
-)
+reply = llm.invoke("Prove that the square root of 2 is irrational.")
 print(reply)
 # Assume for contradiction that √2 = p/q where p and q are integers with no common factors...
 ```
-
-### When to use each level
 
 | effort | Use for | Speed | Cost |
 |---|---|---|---|
@@ -557,22 +627,29 @@ print(reply)
 | `"medium"` | Multi-step reasoning, code generation | Moderate | Medium |
 | `"high"` | Hard proofs, complex analysis, frontier research | Slow | Highest |
 
-### Invalid effort raises immediately
+Text verbosity is controlled separately with `text_verbosity` (`"low"`, `"medium"`, or `"high"`):
+
+```python
+llm = OpenAIResponse(model="gpt-4o", text_verbosity="low")
+reply = llm.invoke("Explain how a car engine works.")
+```
+
+Invalid values raise immediately:
 
 ```python
 OpenAIResponse(model="o3-mini", reasoning_effort="ultra")
 # ValueError: Invalid reasoning_effort 'ultra'. Must be one of: ['high', 'low', 'medium']
 ```
 
----
-
-## Multi-Modal Vision Input
+### Vision Input
 
 Pass image files, URLs, or raw bytes alongside text.
 
-> Note: vision support depends on the provider and model. GPT-4o, LLaVA (Ollama), and several others support it.
+> Note: vision support depends on the provider and model. GPT-4o, Gemini, LLaVA (on Ollama), and several others support it.
 
-### From a file path
+> **Warning:** the file-path branch reads whatever local path it's given and base64-embeds its contents into the outgoing API request, with no path validation. Do not pass LLM- or tool-controlled paths through unchecked. An unchecked path could be used to exfiltrate arbitrary local files.
+
+From a file path:
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -583,7 +660,7 @@ print(reply)
 # The image shows a wooden desk with a laptop, a coffee mug, and an open notebook.
 ```
 
-### From a URL
+From a URL:
 
 ```python
 reply = llm.invoke(
@@ -595,7 +672,7 @@ print(reply)
 # Q3 shows the highest sales at approximately $2.4M for Product A...
 ```
 
-### From raw bytes
+From raw bytes:
 
 ```python
 with open("diagram.png", "rb") as f:
@@ -607,7 +684,7 @@ print(reply)
 # routing requests to three downstream services: Auth, Orders, and Payments...
 ```
 
-### Multiple images
+Multiple images:
 
 ```python
 reply = llm.invoke(
@@ -619,15 +696,14 @@ print(reply)
 # with thousands of attendees, while the second shows a small group of around 20.
 ```
 
----
+### Structured Output
 
-## Structured Output
-
-Return data that matches a Pydantic model automatically.
+Return a Pydantic model as JSON automatically.
 
 ```python
 from pydantic import BaseModel, Field
 from autourgos_responses import OpenAIResponse
+import json
 
 class WeatherReport(BaseModel):
     city: str = Field(description="Name of the city")
@@ -638,7 +714,6 @@ class WeatherReport(BaseModel):
 llm = OpenAIResponse(model="gpt-4o", output_schema=WeatherReport)
 result = llm.invoke("Describe a typical summer day in London.")
 
-import json
 data = json.loads(result["response"])
 print(data)
 # {
@@ -667,11 +742,9 @@ print(result["response"])
 # {"name": "Mira Caldwell", "age": 34}
 ```
 
----
+### JSON Mode
 
-## JSON Mode
-
-Force valid JSON output without defining a schema.
+Force the model to return valid JSON without a schema.
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -693,9 +766,7 @@ print(reply)
 # }
 ```
 
----
-
-## Multi-Turn Chat
+### Multi-Turn Chat
 
 Pass a list of role-tagged messages directly to carry conversation history.
 
@@ -715,7 +786,7 @@ print(reply)
 # Your favourite colour is blue!
 ```
 
-### Async multi-turn
+Async multi-turn:
 
 ```python
 import asyncio
@@ -736,7 +807,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### Building a conversation loop
+Building a conversation loop:
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -760,9 +831,7 @@ print(chat("What is my name and what am I building?"))
 # Your name is Jitin, and you are building an AI framework called Autourgos.
 ```
 
----
-
-## Cost Tracking
+### Cost Tracking
 
 Pass pricing (USD per 1 million tokens) to get cost breakdowns.
 
@@ -778,7 +847,7 @@ llm = OpenAIResponse(
 
 result = llm.invoke("Summarise the history of the internet in 3 sentences.")
 print(result["model"])          # gpt-4o
-print(result["response"])       # The internet began as ARPANET in the 1960s...
+print(result["response"])       # The internet began as ARPANET...
 print(result["input_tokens"])   # 21
 print(result["output_tokens"])  # 68
 print(result["total_tokens"])   # 89
@@ -807,9 +876,7 @@ print(llm.last_metadata)
 # }
 ```
 
----
-
-## Context Manager
+### Context Manager
 
 Automatically closes the HTTP client when done.
 
@@ -820,7 +887,7 @@ with OpenAIResponse(model="gpt-4o") as llm:
     reply = llm.invoke("Quick question: what is 2 + 2?")
     print(reply)
     # 4
-# Client is closed automatically here
+# Client is closed here automatically
 ```
 
 Async context manager:
@@ -838,13 +905,11 @@ async def main():
 asyncio.run(main())
 ```
 
----
+### Circuit Breaker
 
-## Circuit Breaker
+Protects against cascading failures. After `circuit_failure_threshold` consecutive API errors, all calls are blocked for `circuit_cooldown_time` seconds.
 
-Protects against cascading failures. After `circuit_failure_threshold` consecutive API errors, all calls are blocked for `circuit_cooldown_time` seconds, then automatically reset.
-
-This is useful when you are using a local model (Ollama, LM Studio) or a rate-limited API — if the server goes down, the circuit breaker stops your code from hammering it with failed requests.
+This is useful when you are using a local model (Ollama, LM Studio) or a rate-limited API. If the server goes down, the circuit breaker stops your code from hammering it with failed requests.
 
 ```python
 from autourgos_responses import OpenAIResponse, CircuitBreakerOpenException
@@ -852,25 +917,22 @@ from autourgos_responses import OpenAIResponse, CircuitBreakerOpenException
 llm = OpenAIResponse(
     model="gpt-4o",
     circuit_failure_threshold=3,   # open after 3 consecutive failures
-    circuit_cooldown_time=60.0,    # block calls for 60 seconds
+    circuit_cooldown_time=60.0,    # block for 60 seconds
 )
 
 try:
     reply = llm.invoke("Hello!")
-    print(reply)
 except CircuitBreakerOpenException as e:
-    print(f"Circuit is open, skipping call: {e}")
-    # Circuit breaker OPEN for OpenAIResponse — 3 consecutive failures.
-    # Blocked until 1718500060.0.
+    print(f"Circuit is open: {e}")
+    # Circuit breaker OPEN for OpenAIResponse: 3 consecutive failures.
+    # Blocked until 1718500000.0.
 ```
 
-After the cooldown expires, the next call is allowed through as a probe. If it succeeds, the circuit resets to closed. If it fails again, the cooldown restarts.
+The circuit automatically resets after the cooldown and allows one probe call through.
 
----
+### Low-Level Access
 
-## Low-Level Access
-
-Direct access to the raw Responses API object when you need full control.
+Direct access to the raw Responses API response object when you need full control.
 
 ```python
 from autourgos_responses import OpenAIResponse
@@ -900,9 +962,7 @@ raw = llm.create(
 )
 ```
 
----
-
-## Error Handling
+### Error Handling
 
 ```python
 from autourgos_responses import (
@@ -918,27 +978,24 @@ llm = OpenAIResponse(model="gpt-4o")
 
 try:
     reply = llm.invoke("Hello!")
-    print(reply)
 except OpenAIResponseAPIError as e:
-    # All retries exhausted — network issue or rate limit
-    print(f"API error after retries: {e}")
+    # API request failed after all retries (or immediately on a non-retryable 4xx)
+    print(f"API error: {e}")
 except OpenAIResponseResponseError as e:
-    # Response was received but no text could be extracted
-    print(f"Could not parse response: {e}")
+    # Response was received but text could not be extracted
+    print(f"Response parse error: {e}")
 except OpenAIResponseConfigError as e:
-    # Incompatible options e.g. streaming=True + structured_output=True
-    print(f"Configuration error: {e}")
+    # Incompatible options (e.g. streaming + structured_output)
+    print(f"Config error: {e}")
 except OpenAIResponseImportError as e:
-    # openai package is not installed
-    print(f"openai not installed: {e}")
+    # openai SDK not installed
+    print(f"Import error: {e}")
 except CircuitBreakerOpenException as e:
-    # Too many recent failures — circuit is open
-    print(f"Circuit breaker is open: {e}")
+    # Too many recent failures, circuit is open
+    print(f"Circuit open: {e}")
 ```
 
-### Retry behaviour
-
-By default the wrapper retries up to 3 times with exponential back-off:
+Retry behaviour: by default the wrapper retries up to 3 times with exponential back-off, but fails immediately (no retry) on non-retryable client errors — HTTP 400, 401, 403, 404, 422.
 
 | Attempt | Wait before retry |
 |---|---|
@@ -963,18 +1020,18 @@ llm = OpenAIResponse(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `model` | `str` | required | Model name. e.g. `"gpt-4o"`, `"o3-mini"`, `"llama3-70b-8192"` |
+| `model` | `str` | required | Model name. e.g. `"gpt-4o"`, `"o3-mini"`, `"llama3-70b-8192"`, `"gemini-2.0-flash"` |
 | `api_key` | `str` | `OPENAI_API_KEY` env | API key for the provider you are using |
 | `base_url` | `str` | `OPENAI_BASE_URL` env | Provider endpoint. e.g. `"https://api.groq.com/openai/v1"` or `"http://localhost:11434/v1"` |
 | `organization` | `str` | `None` | OpenAI organization ID (OpenAI only) |
 | `project` | `str` | `None` | OpenAI project ID (OpenAI only) |
-| `system_prompt` | `str` | `None` | System prompt sent as `instructions` field |
+| `system_prompt` | `str` | `None` | System prompt sent as the `instructions` field |
 | `prompt_template` | `str` | `None` | Template with `{variable}` placeholders |
-| `temperature` | `float` | `None` | Sampling temperature 0–2 |
-| `top_p` | `float` | `None` | Nucleus sampling 0–1 |
+| `temperature` | `float` | `None` | Sampling temperature 0 to 2. Higher = more random |
+| `top_p` | `float` | `None` | Nucleus sampling 0 to 1 |
 | `max_tokens` | `int` | `None` | Maximum output tokens (maps to `max_output_tokens`) |
 | `reasoning_effort` | `str` | `None` | `"low"`, `"medium"`, or `"high"` — for o3, o3-mini, o1 only |
-| `reasoning_summary` | `str` | `None` | Include reasoning summary in output (OpenAI only) |
+| `reasoning_summary` | `str` | `None` | Include a reasoning summary in output (OpenAI only) |
 | `text_verbosity` | `str` | `None` | `"low"`, `"medium"`, or `"high"` |
 | `output_schema` | `BaseModel` / `dict` | `None` | Pydantic model or JSON schema for structured output |
 | `response_mime_type` | `str` | `None` | `"application/json"` enables JSON object mode |
@@ -982,7 +1039,7 @@ llm = OpenAIResponse(
 | `streaming` | `bool` | `False` | If `True`, `invoke()` streams internally and joins |
 | `max_retries` | `int` | `3` | Retry attempts on transient API errors |
 | `timeout` | `float` | `60.0` | Request timeout in seconds |
-| `backoff_factor` | `float` | `0.5` | Exponential back-off base (wait = factor × 2^attempt) |
+| `backoff_factor` | `float` | `0.5` | Exponential back-off base (wait = factor x 2^attempt) |
 | `input_pricing` | `float` | `None` | USD per 1 million input tokens |
 | `output_pricing` | `float` | `None` | USD per 1 million output tokens |
 | `circuit_failure_threshold` | `int` | `5` | Consecutive failures before the circuit opens |
@@ -990,22 +1047,24 @@ llm = OpenAIResponse(
 
 ---
 
-## What Each Method Returns
+## API Reference
+
+### What Each Method Returns
 
 | Method | Returns |
 |---|---|
-| `invoke(prompt)` | `str` — generated text (or `dict` if `structured_output=True`) |
+| `invoke(prompt)` | `str`, generated text (or `dict` if `structured_output=True`) |
 | `ainvoke(prompt)` | same as `invoke`, async |
-| `stream(prompt)` | `Iterator[str]` — text chunks |
-| `astream(prompt)` | `AsyncIterator[str]` — text chunks |
-| `batch_invoke(prompts)` | `list[str]` — one result per prompt, sequential |
-| `abatch_invoke(prompts)` | `list[str]` — concurrent results |
-| `chat(messages)` | `str` — generated text (or `dict` if `structured_output=True`) |
+| `stream(prompt)` | `Iterator[str]`, text chunks |
+| `astream(prompt)` | `AsyncIterator[str]`, text chunks |
+| `batch_invoke(prompts)` | `list[str]`, one result per prompt, sequential |
+| `abatch_invoke(prompts)` | `list[str]`, concurrent results |
+| `chat(messages)` | `str`, generated text (or `dict` if `structured_output=True`) |
 | `achat(messages)` | same as `chat`, async |
-| `create(input_data)` | Raw OpenAI Responses API response object |
+| `create(input_data)` | Raw Responses API `Response` object |
 | `acreate(input_data)` | same as `create`, async |
 
-### Metadata dict keys (when `structured_output=True` or via `llm.last_metadata`)
+### Metadata dict (when `structured_output=True`, or via `llm.last_metadata`)
 
 | Key | Type | Description |
 |---|---|---|
@@ -1016,25 +1075,8 @@ llm = OpenAIResponse(
 | `"total_tokens"` | `int \| None` | Total token count |
 | `"input_cost"` | `float` | Input cost in USD (only if `input_pricing` set) |
 | `"output_cost"` | `float` | Output cost in USD (only if `output_pricing` set) |
-| `"total_cost"` | `float` | Total cost in USD (only if both pricing values set) |
+| `"total_cost"` | `float` | Total cost in USD (only if both pricing set) |
 | `"latency_ms"` | `float` | Request round-trip time in milliseconds |
-
----
-
-## Supported Providers (quick reference)
-
-| Provider | base_url | Notes |
-|---|---|---|
-| OpenAI | (default) | GPT-4o, o3, o3-mini, o1, GPT-4o-mini |
-| Groq | `https://api.groq.com/openai/v1` | Llama 3, Mixtral, Gemma — very fast |
-| Together AI | `https://api.together.xyz/v1` | 100+ open-source models |
-| Mistral AI | `https://api.mistral.ai/v1` | mistral-large, mixtral, codestral |
-| DeepSeek | `https://api.deepseek.com/v1` | deepseek-chat, deepseek-reasoner |
-| Perplexity | `https://api.perplexity.ai` | Web-connected sonar models |
-| Ollama | `http://localhost:11434/v1` | Runs locally, no API key needed |
-| LM Studio | `http://localhost:1234/v1` | Runs locally, GUI-based |
-| vLLM | `http://your-server:8000/v1` | Self-hosted, high throughput |
-| Azure OpenAI | `https://<resource>.openai.azure.com/...` | Enterprise OpenAI |
 
 ---
 
@@ -1046,8 +1088,8 @@ llm = OpenAIResponse(
 | System prompt field | `messages[0].role = "system"` | `instructions` parameter |
 | Reasoning models | Not supported | `reasoning_effort` param for o3/o1 |
 | Text verbosity control | Not supported | `text_verbosity` param |
-| Multi-turn input | Messages list | Messages list or plain string |
-| Native tool calling | Supported | Not yet in Responses API |
+| Multi-turn input | Messages list | Messages list (via `chat()`) or plain string |
+| Native tool calling | Supported (`invoke_with_tools`) | Not yet in this wrapper |
 | Use when | Building chat agents, tool-calling | Using reasoning models, simple generation |
 
 Both packages support the same providers via `base_url`. Choose based on the API endpoint your use case needs.
@@ -1056,4 +1098,4 @@ Both packages support the same providers via `base_url`. Choose based on the API
 
 ## License
 
-MIT — Copyright (c) 2026 Jitin Kumar Sengar
+Apache License 2.0, Copyright (c) 2026 Jitin Kumar Sengar
