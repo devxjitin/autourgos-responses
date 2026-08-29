@@ -472,7 +472,7 @@ from autourgos_responses import OpenAIResponse
 
 llm = OpenAIResponse(
     model="gpt-4o",
-    system_instruction="You are a concise assistant. Always reply in exactly one sentence.",
+    system_prompt="You are a concise assistant. Always reply in exactly one sentence.",
 )
 
 reply = llm.invoke("What is photosynthesis?")
@@ -635,7 +635,7 @@ class WeatherReport(BaseModel):
     condition: str = Field(description="Weather condition e.g. Sunny, Rainy")
     humidity_percent: int = Field(description="Humidity percentage 0-100")
 
-llm = OpenAIResponse(model="gpt-4o", response_schema=WeatherReport)
+llm = OpenAIResponse(model="gpt-4o", output_schema=WeatherReport)
 result = llm.invoke("Describe a typical summer day in London.")
 
 import json
@@ -661,7 +661,7 @@ schema = {
     "required": ["name", "age"],
 }
 
-llm = OpenAIResponse(model="gpt-4o", response_schema=schema)
+llm = OpenAIResponse(model="gpt-4o", output_schema=schema)
 result = llm.invoke("Invent a fictional person.")
 print(result["response"])
 # {"name": "Mira Caldwell", "age": 34}
@@ -679,7 +679,7 @@ from autourgos_responses import OpenAIResponse
 llm = OpenAIResponse(
     model="gpt-4o",
     response_mime_type="application/json",
-    system_instruction="Always respond with valid JSON only.",
+    system_prompt="Always respond with valid JSON only.",
 )
 
 reply = llm.invoke("List three programming languages with their year of creation.")
@@ -968,15 +968,15 @@ llm = OpenAIResponse(
 | `base_url` | `str` | `OPENAI_BASE_URL` env | Provider endpoint. e.g. `"https://api.groq.com/openai/v1"` or `"http://localhost:11434/v1"` |
 | `organization` | `str` | `None` | OpenAI organization ID (OpenAI only) |
 | `project` | `str` | `None` | OpenAI project ID (OpenAI only) |
-| `system_instruction` | `str` | `None` | System prompt sent as `instructions` field |
+| `system_prompt` | `str` | `None` | System prompt sent as `instructions` field |
 | `prompt_template` | `str` | `None` | Template with `{variable}` placeholders |
 | `temperature` | `float` | `None` | Sampling temperature 0–2 |
 | `top_p` | `float` | `None` | Nucleus sampling 0–1 |
 | `max_tokens` | `int` | `None` | Maximum output tokens (maps to `max_output_tokens`) |
 | `reasoning_effort` | `str` | `None` | `"low"`, `"medium"`, or `"high"` — for o3, o3-mini, o1 only |
 | `reasoning_summary` | `str` | `None` | Include reasoning summary in output (OpenAI only) |
-| `text_verbosity` | `str` | `None` | `"concise"`, `"detailed"`, or `"auto"` |
-| `response_schema` | `BaseModel` / `dict` | `None` | Pydantic model or JSON schema for structured output |
+| `text_verbosity` | `str` | `None` | `"low"`, `"medium"`, or `"high"` |
+| `output_schema` | `BaseModel` / `dict` | `None` | Pydantic model or JSON schema for structured output |
 | `response_mime_type` | `str` | `None` | `"application/json"` enables JSON object mode |
 | `structured_output` | `bool` | `False` | If `True`, `invoke()` returns a metadata dict |
 | `streaming` | `bool` | `False` | If `True`, `invoke()` streams internally and joins |

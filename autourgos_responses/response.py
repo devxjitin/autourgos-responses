@@ -41,6 +41,10 @@ from .core import (
 configure_runtime_environment()
 _OPENAI_AVAILABLE, openai_cls, async_openai_cls, _OPENAI_IMPORT_ERROR = load_openai_module()
 
+# Client errors that will never succeed on retry — fail fast instead of
+# burning the retry budget and adding latency.
+_NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 422}
+
 
 # ── Custom exceptions ─────────────────────────────────────────────────────────
 
@@ -109,7 +113,7 @@ class OpenAIResponse(BaseLLM):
         *,
         organization: Optional[str] = None,
         project: Optional[str] = None,
-        system_instruction: Optional[str] = None,
+        system_prompt: Optional[str] = None,
         prompt_template: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -117,7 +121,7 @@ class OpenAIResponse(BaseLLM):
         reasoning_effort: Optional[str] = None,
         reasoning_summary: Optional[str] = None,
         text_verbosity: Optional[str] = None,
-        response_schema: Any = None,
+        output_schema: Any = None,
         response_mime_type: Optional[str] = None,
         structured_output: bool = False,
         streaming: bool = False,
@@ -136,15 +140,15 @@ class OpenAIResponse(BaseLLM):
             base_url: Override the API base URL (e.g. for proxies).
             organization: OpenAI organization ID.
             project: OpenAI project ID.
-            system_instruction: System prompt sent as the 'instructions' field.
+            system_prompt: System prompt sent as the 'instructions' field.
             prompt_template: Optional template string with {variable} placeholders.
             temperature: Sampling temperature (0–2).
             top_p: Nucleus sampling probability (0–1).
             max_tokens: Maximum output tokens (maps to max_output_tokens).
             reasoning_effort: Reasoning model effort — "low", "medium", or "high".
             reasoning_summary: Whether to include reasoning summary in output.
-            text_verbosity: Output verbosity hint — "concise", "detailed", or "auto".
-            response_schema: Pydantic model or dict for structured JSON output.
+            text_verbosity: Output verbosity hint — "low", "medium", or "high".
+            output_schema: Pydantic model or dict for structured JSON output.
             response_mime_type: e.g. "application/json" to enable json_object mode.
             structured_output: If True, invoke() returns a metadata dict.
             streaming: If True, invoke()/ainvoke() internally stream and join text.
@@ -167,7 +171,7 @@ class OpenAIResponse(BaseLLM):
         self.base_url = base_url
         self.organization = organization
         self.project = project
-        self.system_instruction = system_instruction
+        self.system_prompt = system_prompt
         self.prompt_template = prompt_template
         self.temperature = temperature
         self.top_p = top_p
@@ -175,7 +179,7 @@ class OpenAIResponse(BaseLLM):
         self.reasoning_effort = normalize_reasoning_effort(reasoning_effort)
         self.reasoning_summary = reasoning_summary
         self.text_verbosity = normalize_text_verbosity(text_verbosity)
-        self.response_schema = response_schema
+        self.output_schema = output_schema
         self.response_mime_type = response_mime_type
         self.structured_output = structured_output
         self.streaming = streaming
@@ -277,7 +281,7 @@ class OpenAIResponse(BaseLLM):
 
     def _build_base_params(self, *, input_data: Any, stream: bool) -> Dict[str, Any]:
         text_config = build_text_config(
-            response_schema=self.response_schema,
+            output_schema=self.output_schema,
             response_mime_type=self.response_mime_type,
             text_verbosity=self.text_verbosity,
         )
@@ -288,7 +292,7 @@ class OpenAIResponse(BaseLLM):
         return build_response_create_params(
             self._model_name,
             input_data,
-            instructions=self.system_instruction,
+            instructions=self.system_prompt,
             temperature=self.temperature,
             top_p=self.top_p,
             max_tokens=self.max_tokens,
@@ -306,6 +310,12 @@ class OpenAIResponse(BaseLLM):
                 return self._client.responses.create(**params)
             except Exception as exc:
                 last_exc = exc
+                status_code = getattr(exc, "status_code", None)
+                if status_code in _NON_RETRYABLE_STATUS_CODES:
+                    raise OpenAIResponseAPIError(
+                        f"Responses API request failed with non-retryable status "
+                        f"{status_code}. Error: {type(exc).__name__}: {exc}"
+                    ) from exc
                 if attempt == self.max_retries:
                     raise OpenAIResponseAPIError(
                         f"Responses API request failed after {self.max_retries} attempts. "
@@ -321,6 +331,12 @@ class OpenAIResponse(BaseLLM):
                 return await self._async_client.responses.create(**params)
             except Exception as exc:
                 last_exc = exc
+                status_code = getattr(exc, "status_code", None)
+                if status_code in _NON_RETRYABLE_STATUS_CODES:
+                    raise OpenAIResponseAPIError(
+                        f"Async Responses API request failed with non-retryable status "
+                        f"{status_code}. Error: {type(exc).__name__}: {exc}"
+                    ) from exc
                 if attempt == self.max_retries:
                     raise OpenAIResponseAPIError(
                         f"Async Responses API request failed after {self.max_retries} attempts. "
@@ -372,6 +388,12 @@ class OpenAIResponse(BaseLLM):
                 raise
             except Exception as exc:
                 last_exc = exc
+                status_code = getattr(exc, "status_code", None)
+                if status_code in _NON_RETRYABLE_STATUS_CODES:
+                    raise OpenAIResponseAPIError(
+                        f"Streaming failed with non-retryable status {status_code}. "
+                        f"Error: {type(exc).__name__}: {exc}"
+                    ) from exc
                 if emitted or attempt == self.max_retries:
                     raise OpenAIResponseAPIError(
                         f"Streaming failed after {attempt} attempt(s). "
@@ -399,6 +421,12 @@ class OpenAIResponse(BaseLLM):
                 raise
             except Exception as exc:
                 last_exc = exc
+                status_code = getattr(exc, "status_code", None)
+                if status_code in _NON_RETRYABLE_STATUS_CODES:
+                    raise OpenAIResponseAPIError(
+                        f"Async streaming failed with non-retryable status {status_code}. "
+                        f"Error: {type(exc).__name__}: {exc}"
+                    ) from exc
                 if emitted or attempt == self.max_retries:
                     raise OpenAIResponseAPIError(
                         f"Async streaming failed after {attempt} attempt(s). "

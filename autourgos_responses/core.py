@@ -21,6 +21,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from autourgos_openaichat.core import (
+    _enforce_additional_properties_false,
     configure_async_openai_client,
     configure_openai_client,
     load_openai_module,
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 # ── Reasoning / text config ───────────────────────────────────────────────────
 
 _VALID_REASONING_EFFORTS = {"low", "medium", "high"}
-_VALID_TEXT_VERBOSITIES = {"concise", "detailed", "auto"}
+_VALID_TEXT_VERBOSITIES = {"low", "medium", "high"}
 
 
 def normalize_reasoning_effort(effort: Optional[str]) -> Optional[str]:
@@ -84,7 +85,7 @@ def build_reasoning_config(
 
 
 def build_text_config(
-    response_schema: Any = None,
+    output_schema: Any = None,
     response_mime_type: Optional[str] = None,
     text_verbosity: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -92,31 +93,27 @@ def build_text_config(
     Build the text parameter dict for the Responses API.
 
     Supports:
-        - JSON schema output via response_schema
+        - JSON schema output via output_schema
         - JSON mode via response_mime_type="application/json"
         - text verbosity hint
     """
     config: Dict[str, Any] = {}
 
-    if response_schema is not None:
-        schema_fn = getattr(response_schema, "model_json_schema", None)
+    if output_schema is not None:
+        schema_fn = getattr(output_schema, "model_json_schema", None)
         if callable(schema_fn):
             config["format"] = {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": getattr(response_schema, "__name__", "response"),
-                    "schema": schema_fn(),
-                    "strict": True,
-                },
+                "name": getattr(output_schema, "__name__", "response"),
+                "schema": _enforce_additional_properties_false(schema_fn()),
+                "strict": True,
             }
-        elif isinstance(response_schema, dict):
+        elif isinstance(output_schema, dict):
             config["format"] = {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": "response",
-                    "schema": response_schema,
-                    "strict": True,
-                },
+                "name": "response",
+                "schema": _enforce_additional_properties_false(dict(output_schema)),
+                "strict": True,
             }
     elif response_mime_type and "json" in response_mime_type.lower():
         config["format"] = {"type": "json_object"}
@@ -173,7 +170,9 @@ def build_multimodal_prompt(
     Build the input for a Responses API request.
 
     - No files → returns plain string.
-    - With files → returns a content-array list.
+    - With files → returns a list containing one user message item, since the
+      Responses API's ``input`` expects message objects (``{"role", "content"}``),
+      not bare content parts.
     """
     if not files:
         return text
@@ -184,7 +183,7 @@ def build_multimodal_prompt(
         if part is not None:
             content.append(part)
 
-    return content
+    return [{"role": "user", "content": content}]
 
 
 # ── Responses API params builder ──────────────────────────────────────────────
