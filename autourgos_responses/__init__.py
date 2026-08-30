@@ -26,12 +26,15 @@ Quick start::
 from .response import (
     OpenAIResponse,
     OpenAIResponseAPIError,
+    OpenAIResponseAllProvidersFailedError,
     OpenAIResponseConfigError,
     OpenAIResponseError,
     OpenAIResponseImportError,
+    OpenAIResponseRedactionBlockedError,
     OpenAIResponseResponseError,
+    OpenAIResponseValidationError,
 )
-from .llm import BaseLLM, CircuitBreakerOpenException, FunctionCall, ToolCallResponse
+from .llm import BaseLLM, BudgetExceededException, CircuitBreakerOpenException, FunctionCall, ToolCallResponse
 from .model_runtime import (
     build_structured_output,
     configure_runtime_environment,
@@ -55,11 +58,15 @@ __all__ = [
     "OpenAIResponseImportError",
     "OpenAIResponseResponseError",
     "OpenAIResponseConfigError",
+    "OpenAIResponseValidationError",
+    "OpenAIResponseRedactionBlockedError",
+    "OpenAIResponseAllProvidersFailedError",
     # Base types
     "BaseLLM",
     "FunctionCall",
     "ToolCallResponse",
     "CircuitBreakerOpenException",
+    "BudgetExceededException",
     # Runtime helpers
     "track_latency",
     "extract_usage_metadata",

@@ -44,7 +44,7 @@ def test_circuit_breaker_trips_after_consecutive_failures():
     llm = _make_response(circuit_failure_threshold=2, circuit_cooldown_time=30.0)
 
     # Make the underlying raw API call always raise a generic (non-whitelisted) error.
-    llm._create_raw = MagicMock(side_effect=RuntimeError("boom"))
+    llm._attempt_sync_create = MagicMock(side_effect=RuntimeError("boom"))
 
     # First failure.
     with pytest.raises(RuntimeError):

@@ -17,6 +17,7 @@ it differs from the Chat Completions equivalents.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -221,6 +222,58 @@ def build_response_create_params(
     return params
 
 
+# ── Tool/function calling ─────────────────────────────────────────────────────
+
+def build_responses_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Convert Autourgos tool dicts to the Responses API tool schema.
+
+    Unlike Chat Completions (``{"type": "function", "function": {...}}``), the
+    Responses API tool schema is flat: ``{"type": "function", "name", ...}``.
+    """
+    result: List[Dict[str, Any]] = []
+    for t in tools:
+        if t.get("type") == "function" and "name" in t:
+            result.append(t)
+            continue
+        result.append({
+            "type": "function",
+            "name": t["name"],
+            "description": t.get("description", ""),
+            "parameters": t.get("parameters") or {"type": "object", "properties": {}},
+        })
+    return result
+
+
+def extract_tool_calls_from_response(resp: Any) -> List[Dict[str, Any]]:
+    """
+    Extract raw tool-call dicts from a Responses API response.
+
+    Walks ``resp.output[]`` for items with ``type == "function_call"``, each
+    carrying ``name``, ``arguments`` (a JSON string), and ``call_id``.
+    Returns a list of ``{"name", "arguments", "call_id"}`` dicts with
+    ``arguments`` already parsed from JSON (falling back to ``{}`` on a
+    decode error).
+    """
+    calls: List[Dict[str, Any]] = []
+    output = resp.get("output") if isinstance(resp, dict) else getattr(resp, "output", None)
+    if not output:
+        return calls
+    for item in (output if isinstance(output, list) else []):
+        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        if item_type != "function_call":
+            continue
+        name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+        raw_args = item.get("arguments") if isinstance(item, dict) else getattr(item, "arguments", None)
+        call_id = item.get("call_id") if isinstance(item, dict) else getattr(item, "call_id", None)
+        try:
+            arguments = json.loads(raw_args) if raw_args else {}
+        except (json.JSONDecodeError, TypeError):
+            arguments = {}
+        calls.append({"name": name, "arguments": arguments, "call_id": call_id})
+    return calls
+
+
 # ── Streaming delta extraction ────────────────────────────────────────────────
 
 def extract_text_delta_from_event(event: Any) -> Optional[str]:
@@ -279,4 +332,6 @@ __all__ = [
     "build_multimodal_prompt",
     "build_response_create_params",
     "extract_text_delta_from_event",
+    "build_responses_tools",
+    "extract_tool_calls_from_response",
 ]

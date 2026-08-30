@@ -1,0 +1,92 @@
+"""
+Tests for native tool/function calling ported from autourgos-openaichat,
+adapted to the Responses API's flat tool schema and function_call output items.
+"""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from autourgos_responses import OpenAIResponse
+from autourgos_responses.llm import FunctionCall
+from autourgos_responses.response import OpenAIResponseConfigError
+
+
+def _make_response(model="gpt-4o", **kwargs):
+    with patch("autourgos_responses.response.load_openai_module") as mock_load:
+        mock_load.return_value = (True, MagicMock(), MagicMock(), None)
+        return OpenAIResponse(model=model, api_key="sk-test-dummy", **kwargs)
+
+
+def _mock_tool_call_response():
+    resp = MagicMock()
+    resp.output = [
+        {
+            "type": "function_call",
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+            "call_id": "call_123",
+        }
+    ]
+    resp.usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+    return resp
+
+
+def _mock_final_answer_response(text="Paris is sunny."):
+    resp = MagicMock()
+    resp.output = [{"type": "message", "content": [{"text": text}]}]
+    resp.usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+    return resp
+
+
+TOOLS = [{"name": "get_weather", "description": "Get the weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}]
+
+
+def test_invoke_with_tools_parses_function_call():
+    llm = _make_response()
+    llm._create_across_providers = MagicMock(return_value=(_mock_tool_call_response(), "primary"))
+
+    result = llm.invoke_with_tools("What's the weather in Paris?", TOOLS)
+
+    assert result.has_tool_calls
+    assert result.tool_calls == [FunctionCall(name="get_weather", arguments={"city": "Paris"}, call_id="call_123")]
+
+    sent_params = llm._create_across_providers.call_args[0][0]
+    assert sent_params["tools"][0] == {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Get the weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    }
+
+
+def test_invoke_with_tools_returns_text_when_no_tool_call():
+    llm = _make_response()
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))
+
+    result = llm.invoke_with_tools("What's the weather in Paris?", TOOLS)
+
+    assert not result.has_tool_calls
+    assert result.is_final_answer
+    assert result.text == "Paris is sunny."
+
+
+def test_invoke_with_tools_rejects_files_with_list_prompt():
+    """
+    Regression test: invoke_with_tools() must route list prompts through the
+    same _resolve_prompt() validation as invoke() — not bypass it — so an
+    invalid files+list combination is still rejected instead of silently
+    reaching the API.
+    """
+    llm = _make_response()
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))
+    with pytest.raises(OpenAIResponseConfigError):
+        llm.invoke_with_tools([{"role": "user", "content": "hi"}], TOOLS, files=["img.png"])
+    llm._create_across_providers.assert_not_called()
+
+
+def test_invoke_with_tools_rejects_empty_list_prompt():
+    llm = _make_response()
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))
+    with pytest.raises(ValueError):
+        llm.invoke_with_tools([], TOOLS)

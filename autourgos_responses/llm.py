@@ -12,11 +12,18 @@ of keeping two identical copies in sync.
 
 from __future__ import annotations
 
-from autourgos_openaichat import BaseLLM, CircuitBreakerOpenException, FunctionCall, ToolCallResponse
+from autourgos_openaichat import (
+    BaseLLM,
+    BudgetExceededException,
+    CircuitBreakerOpenException,
+    FunctionCall,
+    ToolCallResponse,
+)
 
 __all__ = [
     "BaseLLM",
     "FunctionCall",
     "ToolCallResponse",
     "CircuitBreakerOpenException",
+    "BudgetExceededException",
 ]

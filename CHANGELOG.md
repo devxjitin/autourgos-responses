@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.0] - 2026-08-30
+
+Feature-parity pass against `autourgos-openaichat`, ported and adapted for the Responses API's different wire format. All new features are opt-in via new constructor params — no change to existing default behavior.
+
+- Added: native tool/function calling — `invoke_with_tools()`/`ainvoke_with_tools()` returning `ToolCallResponse`. Uses the Responses API's flat tool schema (`{"type": "function", "name", ...}`) and parses `function_call` items from `response.output[]`, rather than Chat Completions' nested `tool_calls`.
+- Added: provider fallback chain — `fallback_providers=`, tried in order after the primary exhausts its retries; raises `OpenAIResponseAllProvidersFailedError` if every target fails. `provider_used` is now included in returned metadata.
+- Added: session budget governor — `max_session_cost=` (requires `input_pricing`/`output_pricing`), raises `BudgetExceededException` once accumulated cost hits the cap; `reset_session_budget()` to unblock.
+- Added: local SQLite call ledger — `ledger_path=`/`ledger_store_content=`, records every `invoke`/`ainvoke`/`invoke_structured`/`ainvoke_structured` call. Reuses `autourgos_openaichat.ledger` (schema is API-agnostic).
+- Added: PII/secret redaction — `redact_pii=`, `redact_categories=`, `redact_mode=` ("mask"/"block"), `redact_custom_patterns=`, `redact_custom_terms=`, `redact_patterns_file=`, `redact_restore_in_response=`. Reuses `autourgos_openaichat.redaction`.
+- Added: shadow-mode dual dispatch — `shadow_providers=`, `on_shadow_result=`; concurrent comparison calls with `difflib`-based similarity scoring, results in `last_shadow_results` and (if a ledger is configured) the `shadow_calls` table.
+- Added: validated structured output — `invoke_structured()`/`ainvoke_structured()` return a validated Pydantic instance directly, retrying with the validation error fed back to the model on failure (`max_validation_retries=`). Raises `OpenAIResponseValidationError` on exhaustion.
+- Added: `extra_body=` constrained-decoding passthrough, merged into every request.
+- Changed: `autourgos-openaichat` dependency floor raised to `>=2.2.0` (needed for `ledger.py`/`redaction.py`/`shadow.py`/`BudgetExceededException`).
+- Internal: retry logic refactored to `_attempt_sync_create`/`_attempt_async_create` (per-target) with `_create_across_providers`/`_acreate_across_providers` iterating fallback targets, matching `autourgos-openaichat`'s architecture.
+
 ## [2.0.3] - 2026-08-29
 
 - Docs: added contributor badges (Sonia, Vishwanil Suman) to README, matching `autourgos-openaichat`. No functional changes.
