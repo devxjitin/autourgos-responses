@@ -1055,10 +1055,10 @@ llm = OpenAIResponse(
 
 | Method | Returns |
 |---|---|
-| `invoke(prompt)` | `str`, generated text (or `dict` if `structured_output=True`) |
-| `ainvoke(prompt)` | same as `invoke`, async |
-| `stream(prompt)` | `Iterator[str]`, text chunks |
-| `astream(prompt)` | `AsyncIterator[str]`, text chunks |
+| `invoke(prompt, **overrides)` | `str`, generated text (or `dict` if `structured_output=True`). `**overrides` (raw Responses API params, e.g. `temperature=`, `top_p=`, `max_output_tokens=`) apply to this call only, across the fallback chain; `"input"`/`"model"`/`"stream"` can't be overridden this way |
+| `ainvoke(prompt, **overrides)` | same as `invoke`, async |
+| `stream(prompt, **overrides)` | `Iterator[str]`, text chunks. Same per-call `**overrides` as `invoke` |
+| `astream(prompt, **overrides)` | `AsyncIterator[str]`, text chunks. Same per-call `**overrides` as `invoke` |
 | `batch_invoke(prompts)` | `list[str]`, one result per prompt, sequential |
 | `abatch_invoke(prompts)` | `list[str]`, concurrent results |
 | `chat(messages)` | `str`, generated text (or `dict` if `structured_output=True`) |

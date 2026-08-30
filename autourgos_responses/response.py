@@ -759,7 +759,13 @@ class OpenAIResponse(BaseLLM):
             raise ValueError("Rendered prompt template is empty")
         return build_multimodal_prompt(rendered, files) if files else rendered
 
-    def _build_base_params(self, *, input_data: Any, stream: bool) -> Dict[str, Any]:
+    def _build_base_params(
+        self,
+        *,
+        input_data: Any,
+        stream: bool,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         text_config = build_text_config(
             output_schema=self.output_schema,
             response_mime_type=self.response_mime_type,
@@ -782,6 +788,14 @@ class OpenAIResponse(BaseLLM):
         )
         if self.extra_body:
             params["extra_body"] = dict(self.extra_body)
+        if overrides:
+            # "input"/"model"/"stream" stay structurally managed (per-target
+            # model swap on fallback, non-stream vs. stream dispatch) — a
+            # caller override can't hijack those, only request params like
+            # temperature, top_p, max_output_tokens, instructions.
+            params.update(
+                {k: v for k, v in overrides.items() if k not in ("input", "model", "stream")}
+            )
         return params
 
     # ── Raw API calls (single client, with retry/back-off) ──────────────────────
@@ -874,8 +888,10 @@ class OpenAIResponse(BaseLLM):
 
     # ── Non-stream invocation ─────────────────────────────────────────────────
 
-    def _invoke_non_stream(self, *, input_data: Any) -> Any:
-        params = self._build_base_params(input_data=input_data, stream=False)
+    def _invoke_non_stream(
+        self, *, input_data: Any, overrides: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        params = self._build_base_params(input_data=input_data, stream=False, overrides=overrides)
         resp, provider_label = self._create_across_providers(params)
         text = extract_text_from_response(resp)
         if text:
@@ -884,8 +900,10 @@ class OpenAIResponse(BaseLLM):
             "No text could be extracted from the Responses API response."
         )
 
-    async def _ainvoke_non_stream(self, *, input_data: Any) -> Any:
-        params = self._build_base_params(input_data=input_data, stream=False)
+    async def _ainvoke_non_stream(
+        self, *, input_data: Any, overrides: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        params = self._build_base_params(input_data=input_data, stream=False, overrides=overrides)
         resp, provider_label = await self._acreate_across_providers(params)
         text = extract_text_from_response(resp)
         if text:
@@ -899,8 +917,10 @@ class OpenAIResponse(BaseLLM):
     # once partial text has reached the caller, switching providers mid-stream
     # would duplicate or corrupt output, so the error is raised as-is instead.
 
-    def _invoke_stream_mode(self, *, input_data: Any) -> Iterator[str]:
-        base_params = self._build_base_params(input_data=input_data, stream=True)
+    def _invoke_stream_mode(
+        self, *, input_data: Any, overrides: Optional[Dict[str, Any]] = None
+    ) -> Iterator[str]:
+        base_params = self._build_base_params(input_data=input_data, stream=True, overrides=overrides)
         attempts: List[Any] = []
         for label, model_name, client in self._sync_targets():
             params = dict(base_params)
@@ -956,8 +976,10 @@ class OpenAIResponse(BaseLLM):
             attempts=attempts,
         )
 
-    async def _ainvoke_stream_mode(self, *, input_data: Any) -> AsyncIterator[str]:
-        base_params = self._build_base_params(input_data=input_data, stream=True)
+    async def _ainvoke_stream_mode(
+        self, *, input_data: Any, overrides: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterator[str]:
+        base_params = self._build_base_params(input_data=input_data, stream=True, overrides=overrides)
         attempts: List[Any] = []
         for label, model_name, client in self._async_targets():
             params = dict(base_params)
@@ -1021,6 +1043,7 @@ class OpenAIResponse(BaseLLM):
         prompt_variables: Optional[Dict[str, Any]] = None,
         *,
         files: Optional[Any] = None,
+        **overrides: Any,
     ) -> Any:
         """
         Generate a response synchronously.
@@ -1029,6 +1052,11 @@ class OpenAIResponse(BaseLLM):
             prompt: Text string, content list, or None to use prompt_template.
             prompt_variables: Variables to fill prompt_template placeholders.
             files: Image file paths, bytes, or dicts to include as vision input.
+            **overrides: Per-call request params merged over the constructor's
+                defaults for this call only — e.g. temperature=, top_p=,
+                max_tokens=. Applied to every provider in the fallback chain;
+                "input"/"model"/"stream" are structurally managed and cannot
+                be overridden this way.
 
         Returns:
             Generated text string, or a metadata dict if structured_output=True.
@@ -1036,9 +1064,11 @@ class OpenAIResponse(BaseLLM):
         self._check_budget()
         resolved = self._resolve_prompt(prompt, prompt_variables, files)
         if self.streaming:
-            return "".join(self._invoke_stream_mode(input_data=resolved))
+            return "".join(self._invoke_stream_mode(input_data=resolved, overrides=overrides))
         with track_latency() as timing:
-            response_text, raw_response, provider_label = self._invoke_non_stream(input_data=resolved)
+            response_text, raw_response, provider_label = self._invoke_non_stream(
+                input_data=resolved, overrides=overrides
+            )
 
         masked_response_text = response_text
         if self.redact_restore_in_response:
@@ -1067,18 +1097,21 @@ class OpenAIResponse(BaseLLM):
         prompt_variables: Optional[Dict[str, Any]] = None,
         *,
         files: Optional[Any] = None,
+        **overrides: Any,
     ) -> Any:
-        """Async version of invoke()."""
+        """Async version of invoke(). See invoke() for **overrides semantics."""
         self._check_budget()
         resolved = self._resolve_prompt(prompt, prompt_variables, files)
         if self.streaming:
             chunks: List[str] = []
-            async for delta in self._ainvoke_stream_mode(input_data=resolved):
+            async for delta in self._ainvoke_stream_mode(input_data=resolved, overrides=overrides):
                 chunks.append(delta)
             return "".join(chunks)
 
         with track_latency() as timing:
-            response_text, raw_response, provider_label = await self._ainvoke_non_stream(input_data=resolved)
+            response_text, raw_response, provider_label = await self._ainvoke_non_stream(
+                input_data=resolved, overrides=overrides
+            )
 
         masked_response_text = response_text
         if self.redact_restore_in_response:
@@ -1260,10 +1293,11 @@ class OpenAIResponse(BaseLLM):
         prompt_variables: Optional[Dict[str, Any]] = None,
         *,
         files: Optional[Any] = None,
+        **overrides: Any,
     ) -> Iterator[str]:
-        """Stream text chunks synchronously."""
+        """Stream text chunks synchronously. See invoke() for **overrides semantics."""
         resolved = self._resolve_prompt(prompt, prompt_variables, files)
-        return self._invoke_stream_mode(input_data=resolved)
+        return self._invoke_stream_mode(input_data=resolved, overrides=overrides)
 
     async def astream(
         self,
@@ -1271,10 +1305,11 @@ class OpenAIResponse(BaseLLM):
         prompt_variables: Optional[Dict[str, Any]] = None,
         *,
         files: Optional[Any] = None,
+        **overrides: Any,
     ) -> AsyncIterator[str]:
-        """Stream text chunks asynchronously."""
+        """Stream text chunks asynchronously. See invoke() for **overrides semantics."""
         resolved = self._resolve_prompt(prompt, prompt_variables, files)
-        async for chunk in self._ainvoke_stream_mode(input_data=resolved):
+        async for chunk in self._ainvoke_stream_mode(input_data=resolved, overrides=overrides):
             yield chunk
 
     # ── Low-level create() / acreate() ───────────────────────────────────────

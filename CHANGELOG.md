@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.2.0] - 2026-08-30
+
+- Fixed: `invoke()`/`ainvoke()`/`stream()`/`astream()` now accept `**overrides` (raw Responses API request params, e.g. `temperature=`, `top_p=`, `max_output_tokens=`) merged over the constructor's defaults for that call only, applied consistently across the primary + fallback chain. Same closed-signature bug as `autourgos-openaichat` 2.3.0 (this package's `BaseLLM` is re-exported from there and declares `**kwargs` on all four methods, but the concrete `OpenAIResponse` methods didn't accept it) — a caller passing extra keywords (e.g. `autourgos-react-agent`'s `on_before_iteration` middleware hook) hit `TypeError`.
+- `"input"`, `"model"`, and `"stream"` stay structurally managed and are dropped from `**overrides` before merging, since fallback dispatch depends on swapping `"model"` per target.
+- Non-breaking: calls with no extra keywords behave identically to 2.1.0. 4 new tests (43 total).
+
 ## [2.1.0] - 2026-08-30
 
 Feature-parity pass against `autourgos-openaichat`, ported and adapted for the Responses API's different wire format. All new features are opt-in via new constructor params — no change to existing default behavior.
