@@ -4,7 +4,7 @@ per-call **overrides — mirrors the fix in autourgos-openaichat 2.3.0
 (same closed-signature bug, same BaseLLM contract, shared by this package).
 
 Without this fix, any caller passing extra keywords (e.g.
-autourgos-react-agent's AgentLoopMixin, which injects per-iteration
+autourgos-agent's AgentLoopMixin, which injects per-iteration
 overrides via an on_before_iteration middleware hook) hits
 TypeError: invoke() got an unexpected keyword argument.
 """
