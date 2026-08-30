@@ -1340,50 +1340,76 @@ class OpenAIResponse(BaseLLM):
         """
         Send a multi-turn messages list to the Responses API.
 
+        Goes through the same pipeline as invoke() — redaction, provider
+        fallback, budget cap, ledger, and shadow dispatch — just with a
+        pre-built messages list instead of a single prompt.
+
         Args:
             messages: List of {role, content} dicts.
-            **overrides: Extra params forwarded to create().
+            **overrides: Per-call request params merged over the constructor's
+                defaults for this call only. See invoke() for **overrides
+                semantics.
 
         Returns:
             Generated text or metadata dict.
         """
-        params = self._build_base_params(input_data=messages, stream=False)
-        params.update(overrides)
+        self._check_budget()
+        resolved = self._apply_redaction(messages)
         with track_latency() as timing:
-            resp = self._create_raw(params)
-            text = extract_text_from_response(resp)
-        if not text:
-            raise OpenAIResponseResponseError("No text could be extracted from chat response")
+            response_text, raw_response, provider_label = self._invoke_non_stream(
+                input_data=resolved, overrides=overrides
+            )
+
+        masked_response_text = response_text
+        if self.redact_restore_in_response:
+            response_text = restore_text(response_text, self._last_redaction_map)
+
         metadata = build_structured_output(
             model_name=self._model_name,
-            response_text=text,
-            raw_response=resp,
+            response_text=response_text,
+            raw_response=raw_response,
             latency_ms=timing["latency_ms"],
             input_pricing=self.input_pricing,
             output_pricing=self.output_pricing,
+            extra_fields={"provider_used": provider_label},
         )
         self.last_metadata = metadata
-        return metadata if self.structured_output else text
+        self._record_session_cost(metadata.get("total_cost"))
+        self._log_to_ledger(
+            call_type="chat", prompt=resolved, metadata=metadata, response_override=masked_response_text
+        )
+        self._dispatch_shadow_sync(resolved, response_text)
+        return metadata if self.structured_output else response_text
 
     async def achat(self, messages: List[Dict[str, Any]], **overrides: Any) -> Any:
-        """Async version of chat()."""
-        params = self._build_base_params(input_data=messages, stream=False)
-        params.update(overrides)
+        """Async version of chat(). See chat() for pipeline/**overrides semantics."""
+        self._check_budget()
+        resolved = self._apply_redaction(messages)
         with track_latency() as timing:
-            resp = await self._acreate_raw(params)
-            text = extract_text_from_response(resp)
-        if not text:
-            raise OpenAIResponseResponseError("No text could be extracted from async chat response")
+            response_text, raw_response, provider_label = await self._ainvoke_non_stream(
+                input_data=resolved, overrides=overrides
+            )
+
+        masked_response_text = response_text
+        if self.redact_restore_in_response:
+            response_text = restore_text(response_text, self._last_redaction_map)
+
         metadata = build_structured_output(
             model_name=self._model_name,
-            response_text=text,
-            raw_response=resp,
+            response_text=response_text,
+            raw_response=raw_response,
             latency_ms=timing["latency_ms"],
             input_pricing=self.input_pricing,
             output_pricing=self.output_pricing,
+            extra_fields={"provider_used": provider_label},
         )
         self.last_metadata = metadata
-        return metadata if self.structured_output else text
+        self._record_session_cost(metadata.get("total_cost"))
+        self._log_to_ledger(
+            call_type="achat", prompt=resolved, metadata=metadata, response_override=masked_response_text
+        )
+        await self._dispatch_shadow_async(resolved, response_text)
+        return metadata if self.structured_output else response_text
 
     # ── Batch ─────────────────────────────────────────────────────────────────
 
