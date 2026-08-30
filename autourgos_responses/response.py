@@ -1409,19 +1409,23 @@ class OpenAIResponse(BaseLLM):
         Args:
             prompt: User message string, content list, or pre-built input-item list.
             tools: List of tool dicts with keys name/description/parameters.
-            **kwargs: Optional overrides such as tool_choice, files.
+            **kwargs: tool_choice, files, plus any other per-call request
+                param override (e.g. temperature=, max_output_tokens=) —
+                merged over the constructor's defaults for this call only,
+                the same as invoke()'s **overrides.
 
         Returns:
             ToolCallResponse with tool_calls (if the model called tools)
             or text (if the model gave a final answer).
         """
         files = kwargs.pop("files", None)
+        tool_choice = kwargs.pop("tool_choice", "auto")
         resolved = self._resolve_prompt(prompt, None, files)
         responses_tools = build_responses_tools(tools)
-        params = self._build_base_params(input_data=resolved, stream=False)
+        params = self._build_base_params(input_data=resolved, stream=False, overrides=kwargs)
         if responses_tools:
             params["tools"] = responses_tools
-            params["tool_choice"] = kwargs.get("tool_choice", "auto")
+            params["tool_choice"] = tool_choice
         raw, _provider_label = self._create_across_providers(params)
         raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
         if raw_calls:
@@ -1441,12 +1445,13 @@ class OpenAIResponse(BaseLLM):
     ) -> ToolCallResponse:
         """Async version of invoke_with_tools()."""
         files = kwargs.pop("files", None)
+        tool_choice = kwargs.pop("tool_choice", "auto")
         resolved = self._resolve_prompt(prompt, None, files)
         responses_tools = build_responses_tools(tools)
-        params = self._build_base_params(input_data=resolved, stream=False)
+        params = self._build_base_params(input_data=resolved, stream=False, overrides=kwargs)
         if responses_tools:
             params["tools"] = responses_tools
-            params["tool_choice"] = kwargs.get("tool_choice", "auto")
+            params["tool_choice"] = tool_choice
         raw, _provider_label = await self._acreate_across_providers(params)
         raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
         if raw_calls:

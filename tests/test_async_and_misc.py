@@ -61,6 +61,16 @@ async def test_ainvoke_with_tools_parses_function_call():
 
 
 @pytest.mark.asyncio
+async def test_ainvoke_with_tools_accepts_per_call_overrides():
+    llm = _make_response()
+    llm._acreate_across_providers = AsyncMock(return_value=(_mock_response_obj("ok"), "primary"))
+    await llm.ainvoke_with_tools("hi", TOOLS, temperature=0.2, max_output_tokens=64)
+    sent_params = llm._acreate_across_providers.call_args[0][0]
+    assert sent_params["temperature"] == 0.2
+    assert sent_params["max_output_tokens"] == 64
+
+
+@pytest.mark.asyncio
 async def test_ainvoke_structured_returns_validated_instance():
     llm = _make_response(output_schema=Answer)
     llm._acreate_across_providers = AsyncMock(return_value=(_mock_response_obj('{"value": 9}'), "primary"))

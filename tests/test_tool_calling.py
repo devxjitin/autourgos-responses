@@ -60,6 +60,17 @@ def test_invoke_with_tools_parses_function_call():
     }
 
 
+def test_invoke_with_tools_accepts_per_call_overrides():
+    llm = _make_response(temperature=0.7)
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))
+
+    llm.invoke_with_tools("hi", TOOLS, temperature=0.1, max_output_tokens=64)
+
+    sent_params = llm._create_across_providers.call_args[0][0]
+    assert sent_params["temperature"] == 0.1  # per-call override wins over constructor default
+    assert sent_params["max_output_tokens"] == 64
+
+
 def test_invoke_with_tools_returns_text_when_no_tool_call():
     llm = _make_response()
     llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))

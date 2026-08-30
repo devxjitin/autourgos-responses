@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.2.1] - 2026-08-30
+
+- Fixed: `invoke_with_tools()`/`ainvoke_with_tools()` now also accept `**overrides` (e.g. `temperature=`, `max_output_tokens=`) merged over the constructor's defaults for that call only — same fix as 2.2.0 gave `invoke`/`ainvoke`/`stream`/`astream`, extended to the tool-calling methods, which previously dropped any keyword besides `tool_choice`/`files` silently. Found alongside the identical gap in `autourgos-openaichat`'s `invoke_with_tools()` while adding `autourgos-react-agent`'s `tool_calling_mode="native"`.
+- Non-breaking: calls with no extra keywords behave identically to 2.2.0. 2 new tests (45 total).
+
 ## [2.2.0] - 2026-08-30
 
 - Fixed: `invoke()`/`ainvoke()`/`stream()`/`astream()` now accept `**overrides` (raw Responses API request params, e.g. `temperature=`, `top_p=`, `max_output_tokens=`) merged over the constructor's defaults for that call only, applied consistently across the primary + fallback chain. Same closed-signature bug as `autourgos-openaichat` 2.3.0 (this package's `BaseLLM` is re-exported from there and declares `**kwargs` on all four methods, but the concrete `OpenAIResponse` methods didn't accept it) — a caller passing extra keywords (e.g. `autourgos-react-agent`'s `on_before_iteration` middleware hook) hit `TypeError`.
