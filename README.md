@@ -30,8 +30,12 @@ print(reply)
 - Multi-modal vision input: file paths, URLs, or raw bytes
 - Prompt templates with `{placeholder}` variables
 - Multi-turn conversations via `chat()` / `achat()`, or a plain message list as input
-- Automatic retries with exponential back-off (skips non-retryable 4xx errors), plus a circuit breaker for cascading-failure protection
-- Built-in cost and latency tracking
+- Automatic retries with exponential back-off (skips non-retryable 4xx errors), plus a circuit breaker for cascading-failure protection and an automatic provider fallback chain — no proxy/gateway needed
+- Native tool / function calling, plus validated structured output with an automatic validation-retry loop
+- Built-in cost/latency tracking, plus a budget governor that hard-stops calls once a USD cap is reached
+- Optional local call ledger (SQLite, no external service) and shadow-mode dual dispatch for comparing providers concurrently
+- Optional PII/secret redaction: a heuristic pre-flight scrubber that masks (or blocks) emails, API keys, credit cards, SSNs, and phone numbers — with a bring-your-own-dictionary option and reversible restore-in-response
+- `extra_body=` passthrough for provider-specific request fields — e.g. vLLM's `guided_json`/`guided_regex` for constrained decoding
 - Fully typed (`py.typed`), sync/async context managers, low-level raw-response access
 
 ---
@@ -67,11 +71,24 @@ print(reply)
   - [Reasoning Models](#reasoning-models)
   - [Vision Input](#vision-input)
   - [Structured Output](#structured-output)
+  - [Validated Structured Output](#validated-structured-output)
   - [JSON Mode](#json-mode)
   - [Multi-Turn Chat](#multi-turn-chat)
-  - [Cost Tracking](#cost-tracking)
-  - [Context Manager](#context-manager)
+  - [Native Tool Calling](#native-tool-calling)
+  - **Reliability**
   - [Circuit Breaker](#circuit-breaker)
+  - [Provider Fallback Chain](#provider-fallback-chain)
+  - **Cost**
+  - [Cost Tracking](#cost-tracking)
+  - [Budget Governor](#budget-governor)
+  - **Observability**
+  - [Call Ledger (Audit Trail)](#call-ledger-audit-trail)
+  - [Shadow-Mode Dual Dispatch](#shadow-mode-dual-dispatch)
+  - **Security**
+  - [PII / Secret Redaction](#pii--secret-redaction)
+  - **Advanced**
+  - [Constrained Decoding / Provider-Specific Params](#constrained-decoding--provider-specific-params)
+  - [Context Manager](#context-manager)
   - [Low-Level Access](#low-level-access)
   - [Error Handling](#error-handling)
 - [Constructor Reference](#constructor-reference)
@@ -744,6 +761,51 @@ print(result["response"])
 # {"name": "Mira Caldwell", "age": 34}
 ```
 
+### Validated Structured Output
+
+`invoke_structured()` builds on `output_schema=` and closes the loop: instead of a raw JSON string you get back a **validated Pydantic instance directly**. If the response fails validation (a missing field, a failed `@field_validator`, a provider that ignores strict JSON-schema mode, ...), the validation error is fed back to the model as a correction message and the request is retried, up to `max_validation_retries` times.
+
+```python
+from pydantic import BaseModel, Field
+from autourgos_responses import OpenAIResponse
+
+class CityInfo(BaseModel):
+    city: str = Field(description="Name of the city")
+    country: str = Field(description="Name of the country")
+    population: int = Field(description="Approximate population")
+
+llm = OpenAIResponse(model="gpt-4o", output_schema=CityInfo)
+
+result = llm.invoke_structured("Tell me about Tokyo.")
+print(result)
+# CityInfo(city='Tokyo', country='Japan', population=13960000)
+print(result.population)
+# 13960000
+
+print(llm.last_metadata["validation_retries"])
+# 0  (no correction was needed)
+```
+
+If validation keeps failing, `OpenAIResponseValidationError` (a subclass of `OpenAIResponseResponseError`) is raised with `.raw_text` (the last invalid response) and `.validation_error` (the last Pydantic error):
+
+```python
+from autourgos_responses import OpenAIResponseValidationError
+
+try:
+    result = llm.invoke_structured("Tell me about Tokyo.", max_validation_retries=1)
+except OpenAIResponseValidationError as e:
+    print(f"Still invalid after retries: {e.validation_error}")
+    print(f"Last raw response: {e.raw_text}")
+```
+
+Async version: `await llm.ainvoke_structured(...)`.
+
+Notes:
+- `output_schema` must be a Pydantic `BaseModel` **class** (not a plain dict, not `None`) — a dict schema has no `.model_validate_json()` to validate against.
+- Incompatible with `streaming=True`, same as `structured_output=True`.
+- Each validation retry re-runs the full transport-level retry budget (`max_retries`) too, so worst-case cost/latency is roughly `max_validation_retries × max_retries` — keep `max_validation_retries` small (the default is `2`).
+- Composes with [Provider Fallback Chain](#provider-fallback-chain) — each attempt goes through the same primary → fallback sequence.
+
 ### JSON Mode
 
 Force the model to return valid JSON without a schema.
@@ -833,6 +895,70 @@ print(chat("What is my name and what am I building?"))
 # Your name is Jitin, and you are building an AI framework called Autourgos.
 ```
 
+### Native Tool Calling
+
+Let the model decide when to call your functions.
+
+> Tool calling support varies by provider. OpenAI, Groq, Gemini, Together AI, Mistral, and DeepSeek all support it. Ollama supports it on compatible models.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(model="gpt-4o")
+
+tools = [
+    {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "The city name, e.g. Paris",
+                },
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "description": "Temperature unit",
+                },
+            },
+            "required": ["city"],
+        },
+    }
+]
+
+response = llm.invoke_with_tools("What is the weather in Tokyo right now?", tools)
+
+if response.has_tool_calls:
+    for call in response.tool_calls:
+        print(f"Tool: {call.name}")
+        print(f"Args: {call.arguments}")
+        print(f"ID:   {call.call_id}")
+    # Tool: get_weather
+    # Args: {'city': 'Tokyo', 'unit': 'celsius'}
+    # ID:   call_abc123
+
+elif response.is_final_answer:
+    print(response.text)
+```
+
+Async tool calling:
+
+```python
+response = await llm.ainvoke_with_tools(
+    "What is the weather in London?", tools
+)
+```
+
+If the model's tool-call arguments come back as malformed JSON, `call.arguments` falls back to `{}` and `call.arguments_parse_error` is set to a description of what went wrong — check it if a tool call ever seems to be missing arguments it should have had:
+
+```python
+for call in response.tool_calls:
+    if call.arguments_parse_error:
+        print(f"Warning: {call.name}'s arguments failed to parse: {call.arguments_parse_error}")
+```
+
 ### Cost Tracking
 
 Pass pricing (USD per 1 million tokens) to get cost breakdowns.
@@ -877,6 +1003,36 @@ print(llm.last_metadata)
 #   "latency_ms": 921.7
 # }
 ```
+
+### Budget Governor
+
+Set `max_session_cost=` (USD) to hard-stop `invoke()`/`ainvoke()`/`invoke_structured()`/`ainvoke_structured()` once accumulated session cost reaches the cap — the blocked call is rejected **before** it reaches the API, so no further spend happens. Requires both `input_pricing` and `output_pricing` (cost can't be computed, and the cap can't trigger, without them).
+
+```python
+from autourgos_responses import OpenAIResponse, BudgetExceededException
+
+llm = OpenAIResponse(
+    model="gpt-4o",
+    input_pricing=2.50,
+    output_pricing=10.00,
+    max_session_cost=0.50,   # hard stop at $0.50 for this client's lifetime
+)
+
+try:
+    for prompt in many_prompts:
+        reply = llm.invoke(prompt)
+except BudgetExceededException as e:
+    print(f"Stopped: {e}")
+    print(f"Used ${llm.session_cost_used:.4f} of ${llm.max_session_cost:.4f}")
+```
+
+Call `llm.reset_session_budget()` to zero out `session_cost_used` and unblock a tripped cap (e.g. starting a new billing period without recreating the client).
+
+Notes:
+- **This is a backstop, not an exact per-call prediction.** A call's cost is only known after its response comes back, so the cap is checked against cost *already accumulated from prior calls* — the call that pushes you over the cap still completes; only the *next* one is blocked.
+- Hitting the cap does **not** count toward the circuit breaker's failure threshold — a budget stop is not a provider failure.
+- `invoke_structured()`/`ainvoke_structured()` check the budget once before the first attempt; a failed-validation retry attempt inside that call still costs money but its cost isn't tracked into `session_cost_used` today (only the final successful attempt's cost is recorded).
+- `invoke_with_tools()`/`ainvoke_with_tools()`/`stream()`/`astream()` are **not** budget-protected in this version — same gap as the [Call Ledger](#call-ledger-audit-trail), since no usage/cost metadata is computed on those paths.
 
 ### Context Manager
 
@@ -932,6 +1088,199 @@ except CircuitBreakerOpenException as e:
 
 The circuit automatically resets after the cooldown and allows one probe call through.
 
+### Provider Fallback Chain
+
+Configure backup providers that `invoke()`, `ainvoke()`, `stream()`, `astream()`, `invoke_with_tools()`, and `ainvoke_with_tools()` transparently switch to if the primary provider fails (after its own retries are exhausted) — no proxy or gateway service needed.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(
+    model="gpt-4o",
+    api_key="sk-...",                       # primary: OpenAI
+    fallback_providers=[
+        {
+            "model": "llama3-70b-8192",     # 1st backup: Groq
+            "api_key": "gsk_...",
+            "base_url": "https://api.groq.com/openai/v1",
+        },
+        {
+            "model": "llama3",              # 2nd backup: local Ollama
+            "api_key": "ollama",
+            "base_url": "http://localhost:11434/v1",
+        },
+    ],
+)
+
+reply = llm.invoke("What is the capital of France?")
+print(reply)
+# Paris (served by whichever provider succeeded first)
+
+print(llm.last_metadata["provider_used"])
+# "primary"  or  "fallback[0]:llama3-70b-8192"  or  "fallback[1]:llama3"
+```
+
+Each fallback entry resolves its own `api_key`/`base_url` (falling back to `OPENAI_API_KEY`/`OPENAI_BASE_URL` env vars, exactly like the primary) — nothing is inherited from the primary provider's credentials, so a backup on a different host never sees the primary's key.
+
+If every provider fails, `OpenAIResponseAllProvidersFailedError` (a subclass of `OpenAIResponseAPIError`) is raised with an `.attempts` list of `(label, exception)` pairs, one per provider tried:
+
+```python
+from autourgos_responses import OpenAIResponseAllProvidersFailedError
+
+try:
+    llm.invoke("Hello!")
+except OpenAIResponseAllProvidersFailedError as e:
+    for label, exc in e.attempts:
+        print(f"{label}: {exc}")
+```
+
+**Streaming limitation:** fallback only kicks in if a provider fails *before* it has streamed any text. Once partial output has already reached the caller, switching providers mid-stream would duplicate or corrupt the output, so the error is raised as-is instead of silently trying the next provider.
+
+`create()`/`acreate()` (low-level raw access) are unaffected by `fallback_providers` — they always call the primary client only, since their contract is "the raw response of the client you configured."
+
+### Call Ledger (Audit Trail)
+
+Set `ledger_path=` to record every `invoke()`, `ainvoke()`, `invoke_structured()`, and `ainvoke_structured()` call to a local SQLite file — model, provider used, prompt/response, tokens, cost, latency, validation retries. No external service, no extra dependency (`sqlite3` is part of the Python standard library). Disabled by default (`ledger_path=None`) — zero overhead unless you turn it on.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(
+    model="gpt-4o",
+    input_pricing=2.50,
+    output_pricing=10.00,
+    ledger_path="calls.db",   # created if it doesn't exist
+)
+
+llm.invoke("What is the capital of France?")
+llm.invoke("What is the capital of Japan?")
+```
+
+Query it with any SQLite tool:
+
+```bash
+sqlite3 calls.db "SELECT created_at, model, provider_used, total_cost, latency_ms FROM calls ORDER BY id;"
+```
+
+Set `ledger_store_content=False` to log only tokens/cost/latency/provider metadata — no prompt/response text — if you don't want request content persisted to disk:
+
+```python
+llm = OpenAIResponse(model="gpt-4o", ledger_path="calls.db", ledger_store_content=False)
+```
+
+Notes:
+- A ledger write happens synchronously on every logged call (one `INSERT` + `commit`) — fine for audit/dev/debugging, but adds I/O latency in a tight high-throughput loop. It's not meant for a hot production path.
+- A ledger write can never break your actual LLM call: any failure (disk full, permissions, a closed connection) is logged as a warning and swallowed.
+- `invoke_with_tools()`/`ainvoke_with_tools()`/`stream()`/`astream()` are **not** logged in this version — they don't compute usage/cost metadata today.
+- The ledger connection is closed automatically by the context manager (`with OpenAIResponse(...) as llm:`).
+
+### Shadow-Mode Dual Dispatch
+
+Dispatch the same prompt to one or more "shadow" providers **concurrently** with the primary, purely for observation — `invoke()`/`ainvoke()` always return the **primary's** answer. Useful for catching regressions before switching a default model/provider, or for ongoing quality/cost comparison.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(
+    model="gpt-4o",                          # primary — this is what invoke() returns
+    shadow_providers=[
+        {"model": "gpt-4o-mini"},             # compare against a cheaper model
+        {
+            "model": "llama3-70b-8192",       # and a different provider entirely
+            "api_key": "gsk_...",
+            "base_url": "https://api.groq.com/openai/v1",
+        },
+    ],
+)
+
+reply = llm.invoke("What is the capital of France?")
+print(reply)
+# Paris   (always from the primary — gpt-4o)
+
+for shadow in llm.last_shadow_results:
+    print(shadow)
+```
+
+React to results live with `on_shadow_result=`:
+
+```python
+def alert_on_drift(shadow_result):
+    if shadow_result["similarity"] is not None and shadow_result["similarity"] < 0.5:
+        print(f"Drift detected from {shadow_result['provider_used']}!")
+
+llm = OpenAIResponse(model="gpt-4o", shadow_providers=[...], on_shadow_result=alert_on_drift)
+```
+
+Notes:
+- **Adds latency**: primary and shadow providers run concurrently, so total call time is roughly `max(primary_latency, slowest_shadow_latency)` — not the sum, but not zero overhead either. `invoke()` waits for every shadow provider to finish (or fail) before returning.
+- **Costs real money**: each shadow provider gets one live API call per invocation. This cost is tracked in each shadow result's `total_cost` but is **not** added to `session_cost_used` / counted against `max_session_cost`.
+- Each shadow provider gets a single attempt — no retries. A shadow failure never raises and never affects the primary's result; it just shows up with `error` set in `last_shadow_results`.
+- Only `invoke()`/`ainvoke()` dispatch shadows in this version — `stream()`/`astream()`/`invoke_with_tools()`/`invoke_structured()` don't.
+- If [Call Ledger](#call-ledger-audit-trail) is enabled, every shadow result is also recorded in a separate `shadow_calls` table.
+
+### PII / Secret Redaction
+
+> **This is a heuristic, best-effort scrubber, not a compliance-grade DLP solution.** It's regex-based: it will miss PII that doesn't match a known pattern, and it will occasionally mask legitimate content that happens to match a pattern. Use it as one layer of defense-in-depth, not a guarantee. Disabled by default.
+
+Set `redact_pii=True` to scan the resolved prompt for likely secrets/PII before it's sent to the provider — covers every call path (`invoke`, `ainvoke`, `stream`, `astream`, `invoke_with_tools`, `ainvoke_with_tools`, `invoke_structured`, `ainvoke_structured`). Built-in categories: `email`, `credit_card`, `ssn`, `phone`, `api_key`.
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(model="gpt-4o", redact_pii=True)
+
+reply = llm.invoke("My email is bob@example.com and my key is sk-abc123...")
+# The model actually receives:
+# "My email is [REDACTED:email] and my key is [REDACTED:api_key]"
+
+print(llm.last_redacted_categories)
+# ["email", "api_key"]
+```
+
+Restrict to specific categories, or add your own patterns:
+
+```python
+llm = OpenAIResponse(
+    model="gpt-4o",
+    redact_pii=True,
+    redact_categories=["email", "api_key"],           # skip credit_card/ssn/phone
+    redact_custom_patterns={"internal_id": r"EMP-\d{5}"},
+)
+```
+
+Bring your own dictionary of exact/literal values instead of writing regex for everything (`redact_custom_terms`), or point `redact_patterns_file` at a shared JSON file with `"patterns"`/`"terms"` keys — see [autourgos-openaichat's README](https://github.com/devxjitin/autourgos-openaichat#pii--secret-redaction) for the full walkthrough (this package shares the same redaction engine and constructor parameters).
+
+Use `redact_mode="block"` to reject the call outright instead of masking and proceeding:
+
+```python
+from autourgos_responses import OpenAIResponseRedactionBlockedError
+
+llm = OpenAIResponse(model="gpt-4o", redact_pii=True, redact_mode="block")
+
+try:
+    llm.invoke("My email is bob@example.com")
+except OpenAIResponseRedactionBlockedError as e:
+    print(f"Blocked, matched: {e.categories_found}")
+    # Blocked, matched: ['email']
+```
+
+Set `redact_restore_in_response=True` (requires `redact_pii=True` and `redact_mode="mask"`) to have the final result swap masked placeholders back for their real values — the model itself still never sees the real value, only whatever it echoes back gets restored client-side. The [Call Ledger](#call-ledger-audit-trail) always records the still-masked text regardless of this setting.
+
+### Constrained Decoding / Provider-Specific Params
+
+Self-hosted OpenAI-compatible servers (vLLM, llama.cpp, and others) support extra, non-standard request fields for constrained/guided generation. Set `extra_body=` on the constructor to merge your own fields into **every** request this client makes (primary, fallback, and shadow providers alike).
+
+```python
+from autourgos_responses import OpenAIResponse
+
+llm = OpenAIResponse(
+    model="my-local-model",
+    base_url="http://your-vllm-server:8000/v1",
+    api_key="EMPTY",
+    extra_body={"guided_json": {"type": "object", "properties": {"answer": {"type": "string"}}}},
+)
+```
+
 ### Low-Level Access
 
 Direct access to the raw Responses API response object when you need full control.
@@ -973,28 +1322,44 @@ from autourgos_responses import (
     OpenAIResponseResponseError,
     OpenAIResponseConfigError,
     OpenAIResponseImportError,
+    OpenAIResponseValidationError,
+    OpenAIResponseRedactionBlockedError,
+    OpenAIResponseAllProvidersFailedError,
     CircuitBreakerOpenException,
+    BudgetExceededException,
 )
 
 llm = OpenAIResponse(model="gpt-4o")
 
 try:
     reply = llm.invoke("Hello!")
+except OpenAIResponseAllProvidersFailedError as e:
+    # every provider (primary + all fallback_providers) failed
+    print(f"All providers failed: {e.attempts}")
 except OpenAIResponseAPIError as e:
     # API request failed after all retries (or immediately on a non-retryable 4xx)
     print(f"API error: {e}")
 except OpenAIResponseResponseError as e:
     # Response was received but text could not be extracted
     print(f"Response parse error: {e}")
+except OpenAIResponseValidationError as e:
+    # invoke_structured()/ainvoke_structured() still invalid after retries
+    print(f"Validation error: {e.validation_error}")
 except OpenAIResponseConfigError as e:
     # Incompatible options (e.g. streaming + structured_output)
     print(f"Config error: {e}")
 except OpenAIResponseImportError as e:
     # openai SDK not installed
     print(f"Import error: {e}")
+except OpenAIResponseRedactionBlockedError as e:
+    # redact_pii=True, redact_mode="block", and a match was found
+    print(f"Blocked: {e.categories_found}")
 except CircuitBreakerOpenException as e:
     # Too many recent failures, circuit is open
     print(f"Circuit open: {e}")
+except BudgetExceededException as e:
+    # max_session_cost reached
+    print(f"Budget exceeded: {e}")
 ```
 
 Retry behaviour: by default the wrapper retries up to 3 times with exponential back-off, but fails immediately (no retry) on non-retryable client errors — HTTP 400, 401, 403, 404, 422.
@@ -1046,6 +1411,20 @@ llm = OpenAIResponse(
 | `output_pricing` | `float` | `None` | USD per 1 million output tokens |
 | `circuit_failure_threshold` | `int` | `5` | Consecutive failures before the circuit opens |
 | `circuit_cooldown_time` | `float` | `30.0` | Seconds the circuit stays open before probing |
+| `fallback_providers` | `list[dict]` | `None` | Backup providers tried in order after the primary exhausts retries. Each dict: `model` (required), `api_key`/`base_url`/`organization`/`project` (optional) |
+| `ledger_path` | `str` | `None` | If set, logs every `invoke`/`ainvoke`/`invoke_structured`/`ainvoke_structured` call to a local SQLite file |
+| `ledger_store_content` | `bool` | `True` | If `False`, the ledger logs only tokens/cost/latency/provider — no prompt/response text |
+| `max_session_cost` | `float` | `None` | Hard-stop cap in USD; requires `input_pricing`/`output_pricing`. Raises `BudgetExceededException` once reached |
+| `redact_pii` | `bool` | `False` | Scan the resolved prompt for secrets/PII before sending |
+| `redact_categories` | `list[str]` | all | Which built-in categories to scan for: `email`, `credit_card`, `ssn`, `phone`, `api_key` |
+| `redact_mode` | `str` | `"mask"` | `"mask"` replaces matches and proceeds; `"block"` raises `OpenAIResponseRedactionBlockedError` instead |
+| `redact_custom_patterns` | `dict` | `None` | Extra `{name: regex}` entries merged in alongside the built-ins |
+| `redact_custom_terms` | `dict` | `None` | Bring-your-own dictionary of exact/literal values, as `{category: [values]}` |
+| `redact_patterns_file` | `str` | `None` | Path to a JSON file with `"patterns"`/`"terms"` keys, loaded once at construction |
+| `redact_restore_in_response` | `bool` | `False` | Swap masked placeholders back for real values in the returned text. Requires `redact_pii=True`, `redact_mode="mask"` |
+| `shadow_providers` | `list[dict]` | `None` | Providers dispatched concurrently with the primary, for comparison only. Same entry shape as `fallback_providers` |
+| `on_shadow_result` | `callable` | `None` | Callback invoked with each shadow result dict as it completes |
+| `extra_body` | `dict` | `None` | Raw provider-specific request fields merged into every request (primary, fallback, shadow) |
 
 ---
 
@@ -1063,8 +1442,31 @@ llm = OpenAIResponse(
 | `abatch_invoke(prompts)` | `list[str]`, concurrent results |
 | `chat(messages)` | `str`, generated text (or `dict` if `structured_output=True`) |
 | `achat(messages)` | same as `chat`, async |
+| `invoke_with_tools(prompt, tools)` | `ToolCallResponse`, `.tool_calls` list or `.text` |
+| `ainvoke_with_tools(prompt, tools)` | same as `invoke_with_tools`, async |
+| `invoke_structured(prompt)` | Validated instance of `output_schema` (raises `OpenAIResponseValidationError` on exhaustion) |
+| `ainvoke_structured(prompt)` | same as `invoke_structured`, async |
 | `create(input_data)` | Raw Responses API `Response` object |
 | `acreate(input_data)` | same as `create`, async |
+
+### `ToolCallResponse` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `.tool_calls` | `list[FunctionCall]` | Tool calls the model wants to make (empty if final answer) |
+| `.text` | `str \| None` | Final text answer (None if tool calls present) |
+| `.raw` | `Any` | Raw provider response object |
+| `.has_tool_calls` | `bool` | `True` when `tool_calls` is non-empty |
+| `.is_final_answer` | `bool` | `True` when `text` is present and `tool_calls` is empty |
+
+### `FunctionCall` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `.name` | `str` | Tool function name |
+| `.arguments` | `dict` | Parsed JSON arguments (`{}` if parsing failed — see `.arguments_parse_error`) |
+| `.call_id` | `str \| None` | Call ID for multi-turn tracking |
+| `.arguments_parse_error` | `str \| None` | Set to the parse error message when the model's JSON arguments failed to parse; `None` on success |
 
 ### Metadata dict (when `structured_output=True`, or via `llm.last_metadata`)
 
@@ -1079,10 +1481,14 @@ llm = OpenAIResponse(
 | `"output_cost"` | `float` | Output cost in USD (only if `output_pricing` set) |
 | `"total_cost"` | `float` | Total cost in USD (only if both pricing set) |
 | `"latency_ms"` | `float` | Request round-trip time in milliseconds |
+| `"provider_used"` | `str` | `"primary"` or `"fallback[N]:<model>"` — which provider actually served the request |
+| `"validation_retries"` | `int` | Only set after `invoke_structured()`/`ainvoke_structured()` — number of correction attempts needed (`0` = valid on first try) |
 
 ---
 
 ## Differences vs autourgos-openaichat
+
+Both packages implement the same feature set (fallback chain, budget governor, call ledger, shadow-mode dispatch, PII redaction, native tool calling, validated structured output) — `autourgos-responses` builds directly on `autourgos-openaichat`'s shared base layer. The real differences are which underlying API endpoint each one targets and the handful of things unique to the Responses API:
 
 | Feature | autourgos-openaichat | autourgos-responses |
 |---|---|---|
@@ -1091,8 +1497,8 @@ llm = OpenAIResponse(
 | Reasoning models | Not supported | `reasoning_effort` param for o3/o1 |
 | Text verbosity control | Not supported | `text_verbosity` param |
 | Multi-turn input | Messages list | Messages list (via `chat()`) or plain string |
-| Native tool calling | Supported (`invoke_with_tools`) | Not yet in this wrapper |
-| Use when | Building chat agents, tool-calling | Using reasoning models, simple generation |
+| Native tool calling | Supported (`invoke_with_tools`) | Supported (`invoke_with_tools`) |
+| Use when | Building chat agents, tool-calling on Chat Completions-only providers | Using reasoning models, or any provider that supports the Responses API |
 
 Both packages support the same providers via `base_url`. Choose based on the API endpoint your use case needs.
 
