@@ -60,6 +60,31 @@ def test_invoke_with_tools_parses_function_call():
     }
 
 
+def test_invoke_with_tools_malformed_arguments_json_falls_back_to_empty_dict():
+    """Malformed `arguments` JSON used to silently become {} with no way to
+    tell it apart from a genuinely empty-args call; arguments_parse_error
+    now surfaces that distinction."""
+    resp = MagicMock()
+    resp.output = [
+        {
+            "type": "function_call",
+            "name": "get_weather",
+            "arguments": "{not valid json",
+            "call_id": "call_999",
+        }
+    ]
+    resp.usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+
+    llm = _make_response()
+    llm._create_across_providers = MagicMock(return_value=(resp, "primary"))
+
+    result = llm.invoke_with_tools("What's the weather?", TOOLS)
+
+    assert result.has_tool_calls
+    assert result.tool_calls[0].arguments == {}
+    assert result.tool_calls[0].arguments_parse_error is not None
+
+
 def test_invoke_with_tools_accepts_per_call_overrides():
     llm = _make_response(temperature=0.7)
     llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))

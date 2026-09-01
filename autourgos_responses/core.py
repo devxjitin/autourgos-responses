@@ -21,8 +21,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from autourgos_openaichat import enforce_additional_properties_false
 from autourgos_openaichat.core import (
-    _enforce_additional_properties_false,
     configure_async_openai_client,
     configure_openai_client,
     load_openai_module,
@@ -106,14 +106,14 @@ def build_text_config(
             config["format"] = {
                 "type": "json_schema",
                 "name": getattr(output_schema, "__name__", "response"),
-                "schema": _enforce_additional_properties_false(schema_fn()),
+                "schema": enforce_additional_properties_false(schema_fn()),
                 "strict": True,
             }
         elif isinstance(output_schema, dict):
             config["format"] = {
                 "type": "json_schema",
                 "name": "response",
-                "schema": _enforce_additional_properties_false(dict(output_schema)),
+                "schema": enforce_additional_properties_false(dict(output_schema)),
                 "strict": True,
             }
     elif response_mime_type and "json" in response_mime_type.lower():
@@ -251,9 +251,11 @@ def extract_tool_calls_from_response(resp: Any) -> List[Dict[str, Any]]:
 
     Walks ``resp.output[]`` for items with ``type == "function_call"``, each
     carrying ``name``, ``arguments`` (a JSON string), and ``call_id``.
-    Returns a list of ``{"name", "arguments", "call_id"}`` dicts with
-    ``arguments`` already parsed from JSON (falling back to ``{}`` on a
-    decode error).
+    Returns a list of ``{"name", "arguments", "call_id",
+    "arguments_parse_error"}`` dicts with ``arguments`` already parsed from
+    JSON (falling back to ``{}`` on a decode error -- ``arguments_parse_error``
+    is set to the error message in that case so a mismatched/missing-args
+    tool call doesn't silently look identical to a genuinely empty-args one).
     """
     calls: List[Dict[str, Any]] = []
     output = resp.get("output") if isinstance(resp, dict) else getattr(resp, "output", None)
@@ -266,11 +268,22 @@ def extract_tool_calls_from_response(resp: Any) -> List[Dict[str, Any]]:
         name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
         raw_args = item.get("arguments") if isinstance(item, dict) else getattr(item, "arguments", None)
         call_id = item.get("call_id") if isinstance(item, dict) else getattr(item, "call_id", None)
+        parse_error = None
         try:
             arguments = json.loads(raw_args) if raw_args else {}
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as exc:
             arguments = {}
-        calls.append({"name": name, "arguments": arguments, "call_id": call_id})
+            parse_error = str(exc)
+            logger.warning(
+                "Malformed tool-call arguments for %r; treating as {}: %s",
+                name or "<unknown>", exc,
+            )
+        calls.append({
+            "name": name,
+            "arguments": arguments,
+            "call_id": call_id,
+            "arguments_parse_error": parse_error,
+        })
     return calls
 
 

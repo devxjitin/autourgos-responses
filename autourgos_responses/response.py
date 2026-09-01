@@ -1471,7 +1471,10 @@ class OpenAIResponse(BaseLLM):
         raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
         if raw_calls:
             tool_calls = [
-                FunctionCall(name=c["name"], arguments=c["arguments"], call_id=c["call_id"])
+                FunctionCall(
+                    name=c["name"], arguments=c["arguments"], call_id=c["call_id"],
+                    arguments_parse_error=c.get("arguments_parse_error"),
+                )
                 for c in raw_calls
             ]
             return ToolCallResponse(tool_calls=tool_calls, raw=raw)
@@ -1497,7 +1500,10 @@ class OpenAIResponse(BaseLLM):
         raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
         if raw_calls:
             tool_calls = [
-                FunctionCall(name=c["name"], arguments=c["arguments"], call_id=c["call_id"])
+                FunctionCall(
+                    name=c["name"], arguments=c["arguments"], call_id=c["call_id"],
+                    arguments_parse_error=c.get("arguments_parse_error"),
+                )
                 for c in raw_calls
             ]
             return ToolCallResponse(tool_calls=tool_calls, raw=raw)
