@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.3.0] - 2026-09-01
+
+- Added: `extract_tool_calls_from_response` now includes
+  `arguments_parse_error` in its returned dicts and logs a warning on a
+  JSON decode failure, and `invoke_with_tools`/`ainvoke_with_tools`
+  propagate it into the `FunctionCall` objects they build (previously
+  discarded).
+- Changed: now imports the public `enforce_additional_properties_false`
+  from `autourgos_openaichat`'s package root instead of the private
+  `_enforce_additional_properties_false` in its internals module.
+- BREAKING (dependency floor): `autourgos-openaichat` floor raised to
+  `>=2.4.0`, the first version that publicly exports
+  `enforce_additional_properties_false`.
+- Docs: added the previously undocumented Native Tool Calling, Validated
+  Structured Output, Provider Fallback Chain, Budget Governor, Call Ledger,
+  Shadow-Mode Dual Dispatch, PII/Secret Redaction, and Constrained Decoding
+  sections to the README — all were already shipped in code but entirely
+  missing from the docs, including a false "not yet supported" claim about
+  native tool calling.
+
 ## [2.2.1] - 2026-08-30
 
 - Fixed: `invoke_with_tools()`/`ainvoke_with_tools()` now also accept `**overrides` (e.g. `temperature=`, `max_output_tokens=`) merged over the constructor's defaults for that call only — same fix as 2.2.0 gave `invoke`/`ainvoke`/`stream`/`astream`, extended to the tool-calling methods, which previously dropped any keyword besides `tool_choice`/`files` silently. Found alongside the identical gap in `autourgos-openaichat`'s `invoke_with_tools()` while adding `autourgos-react-agent`'s `tool_calling_mode="native"`.
