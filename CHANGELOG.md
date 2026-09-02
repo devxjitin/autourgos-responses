@@ -1,5 +1,39 @@
 # Changelog
 
+## [2.4.0] - 2026-09-02
+
+- Fixed (via `autourgos-openaichat>=2.5.0`, whose `BaseLLM` this package
+  re-exports directly): the circuit breaker counted `OpenAIResponseConfigError`
+  (a caller/config mistake) and `OpenAIResponseRedactionBlockedError`
+  (`redact_mode="block"` correctly refusing a PII-matching prompt) as
+  transient API failures, and `stream()`/`astream()` were never wrapped by
+  the circuit breaker at all (a mid-stream failure never counted toward it,
+  and an already-open circuit didn't stop them from hitting a known-down
+  provider). Both exception classes now mix in the new `NonTransientError`
+  marker; `stream()`/`astream()` are now wrapped like every other method.
+- Fixed (via `autourgos-openaichat>=2.5.0`): `_check_budget()`/
+  `_record_session_cost()` weren't atomic together, so N concurrent calls
+  sharing one `max_session_cost`-capped instance (e.g. via `abatch_invoke()`)
+  could all pass the budget check before any of them recorded cost,
+  overshooting the cap by up to N-1 calls' worth. `invoke()`/`ainvoke()`/
+  `invoke_structured()`/`ainvoke_structured()`/`chat()`/`achat()` now wrap
+  their non-streaming body in the shared admission context managers, so
+  concurrent calls are admitted one at a time and the cap actually holds.
+- Fixed (via `autourgos-openaichat>=2.5.0`): `normalize_model_name()`
+  force-lowercased the model identifier actually sent in every request,
+  silently breaking case-sensitive identifiers — Azure OpenAI deployment
+  names and self-hosted/vLLM model tags. Now only strips surrounding
+  whitespace; case is preserved. No local code change, but this package's
+  own tests now cover it too.
+- Added: `max_call_duration=` — an optional aggregate wall-clock deadline
+  (seconds) for one logical call, covering every retry attempt and (if
+  configured) every fallback provider. Checked between attempts/providers
+  (not by cancelling an in-flight request); raises the new
+  `OpenAIResponseDeadlineExceededError` once exceeded. `None` (default)
+  disables this — no behavior change for existing callers.
+- Changed: `autourgos-openaichat` dependency floor raised to `>=2.5.0` to
+  pick up the fixes above.
+
 ## [2.3.2] - 2026-09-02
 
 - Fixed (via `autourgos-openaichat>=2.4.2`): the shared `configure_openai_client`/

@@ -48,7 +48,7 @@ try:
     from importlib.metadata import version as _v, PackageNotFoundError
     __version__ = _v("autourgos-responses")
 except Exception:
-    __version__ = "2.3.2"
+    __version__ = "2.4.0"
 
 __all__ = [
     # Main class
