@@ -30,7 +30,7 @@ print(reply)
 - Multi-modal vision input: file paths, URLs, or raw bytes
 - Prompt templates with `{placeholder}` variables
 - Multi-turn conversations via `chat()` / `achat()`, or a plain message list as input
-- Automatic retries with exponential back-off (skips non-retryable 4xx errors), plus a circuit breaker for cascading-failure protection and an automatic provider fallback chain — no proxy/gateway needed
+- Automatic retries with exponential back-off (skips non-retryable 4xx errors), plus a circuit breaker for cascading-failure protection and an automatic provider fallback chain — no proxy/gateway needed — plus an optional aggregate call deadline to cap total wall-clock time across all of them
 - Native tool / function calling, plus validated structured output with an automatic validation-retry loop
 - Built-in cost/latency tracking, plus a budget governor that hard-stops calls once a USD cap is reached
 - Optional local call ledger (SQLite, no external service) and shadow-mode dual dispatch for comparing providers concurrently
@@ -78,6 +78,7 @@ print(reply)
   - **Reliability**
   - [Circuit Breaker](#circuit-breaker)
   - [Provider Fallback Chain](#provider-fallback-chain)
+  - [Aggregate Call Deadline](#aggregate-call-deadline)
   - **Cost**
   - [Cost Tracking](#cost-tracking)
   - [Budget Governor](#budget-governor)
@@ -1138,6 +1139,28 @@ except OpenAIResponseAllProvidersFailedError as e:
 
 `create()`/`acreate()` (low-level raw access) are unaffected by `fallback_providers` — they always call the primary client only, since their contract is "the raw response of the client you configured."
 
+### Aggregate Call Deadline
+
+`max_retries` and `fallback_providers` each get their own full retry budget independently — without a cap on total wall-clock time, a call that keeps failing can take roughly `providers × max_retries × timeout` (plus back-off sleeps) before finally returning or raising. Set `max_call_duration` (seconds) to cap the *whole* logical call — every retry attempt and every fallback provider combined:
+
+```python
+from autourgos_responses import OpenAIResponse, OpenAIResponseDeadlineExceededError
+
+llm = OpenAIResponse(
+    model="gpt-4o",
+    fallback_providers=[{"model": "llama3-70b-8192", "api_key": "gsk_...", "base_url": "https://api.groq.com/openai/v1"}],
+    max_retries=5,
+    max_call_duration=10.0,   # give up after 10s total, across every attempt/provider
+)
+
+try:
+    reply = llm.invoke("Hello!")
+except OpenAIResponseDeadlineExceededError as e:
+    print(f"Gave up after the deadline: {e}")
+```
+
+The deadline is checked *between* attempts/providers, not by cancelling a request already sent — an in-flight HTTP call stays bounded by `timeout` as usual, so total wall-clock time can exceed `max_call_duration` by up to one in-flight request's duration, but never by a further full retry or fallback cycle. `None` (the default) disables this entirely — retries and fallback behave exactly as before. `create()`/`acreate()` respect it too, applied to that single primary-only call.
+
 ### Call Ledger (Audit Trail)
 
 Set `ledger_path=` to record every `invoke()`, `ainvoke()`, `invoke_structured()`, and `ainvoke_structured()` call to a local SQLite file — model, provider used, prompt/response, tokens, cost, latency, validation retries. No external service, no extra dependency (`sqlite3` is part of the Python standard library). Disabled by default (`ledger_path=None`) — zero overhead unless you turn it on.
@@ -1319,6 +1342,7 @@ raw = llm.create(
 from autourgos_responses import (
     OpenAIResponse,
     OpenAIResponseAPIError,
+    OpenAIResponseDeadlineExceededError,
     OpenAIResponseResponseError,
     OpenAIResponseConfigError,
     OpenAIResponseImportError,
@@ -1336,6 +1360,9 @@ try:
 except OpenAIResponseAllProvidersFailedError as e:
     # every provider (primary + all fallback_providers) failed
     print(f"All providers failed: {e.attempts}")
+except OpenAIResponseDeadlineExceededError as e:
+    # max_call_duration was exceeded partway through retries/fallback
+    print(f"Deadline exceeded: {e}")
 except OpenAIResponseAPIError as e:
     # API request failed after all retries (or immediately on a non-retryable 4xx)
     print(f"API error: {e}")
@@ -1381,6 +1408,8 @@ llm = OpenAIResponse(
 )
 ```
 
+That retry budget applies per provider — add `fallback_providers` and each backup gets its own full retry budget too. To cap the *total* time across all of them, see [Aggregate Call Deadline](#aggregate-call-deadline).
+
 ---
 
 ## Constructor Reference
@@ -1407,6 +1436,7 @@ llm = OpenAIResponse(
 | `max_retries` | `int` | `3` | Retry attempts on transient API errors |
 | `timeout` | `float` | `60.0` | Request timeout in seconds |
 | `backoff_factor` | `float` | `0.5` | Exponential back-off base (wait = factor x 2^attempt) |
+| `max_call_duration` | `float` | `None` | Aggregate wall-clock budget in seconds across every retry attempt and fallback provider (see [Aggregate Call Deadline](#aggregate-call-deadline)) |
 | `input_pricing` | `float` | `None` | USD per 1 million input tokens |
 | `output_pricing` | `float` | `None` | USD per 1 million output tokens |
 | `circuit_failure_threshold` | `int` | `5` | Consecutive failures before the circuit opens |
