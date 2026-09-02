@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.3.2] - 2026-09-02
+
+- Fixed (via `autourgos-openaichat>=2.4.2`): the shared `configure_openai_client`/
+  `configure_async_openai_client` helpers now pass `max_retries=0` to the
+  underlying `openai` SDK client, so the SDK no longer double-retries
+  underneath this library's own retry/backoff loop. No local code changes;
+  bumped the minimum `autourgos-openaichat` dependency to pick up the fix.
+- Fixed: `invoke()`/`ainvoke()`/`chat()`/`achat()`/`invoke_structured()`/
+  `ainvoke_structured()` always attributed `llm.last_metadata`/the ledger to
+  the *primary's* model name and `input_pricing`/`output_pricing`, even when
+  a fallback provider actually answered — misreporting the model and
+  computing cost from the wrong per-token price applied to the fallback's
+  real token usage. Shadow dispatch had the same bug. `fallback_providers`/
+  `shadow_providers` entries can now set their own optional
+  `input_pricing`/`output_pricing`; when an entry doesn't set them, cost
+  fields are simply omitted for that call instead of computed with the
+  primary's (wrong) price for a different model.
+
 ## [2.3.1] - 2026-09-01
 
 - Metadata: added `maintainers` (Sonia, Vishwanil Suman) to `pyproject.toml`,
