@@ -37,6 +37,17 @@ def test_openai_response_is_subclass_of_baseLLM_and_constructs():
     assert llm.model == "gpt-4o"
 
 
+def test_model_name_strips_whitespace_and_preserves_case():
+    """
+    Regression: normalize_model_name() (reused from autourgos-openaichat)
+    must only strip whitespace, never lowercase -- model/deployment
+    identifiers can be case-sensitive (Azure OpenAI deployment names,
+    self-hosted/vLLM model tags).
+    """
+    llm = _make_response(model="  GPT4o-Prod-Deployment  ")
+    assert llm._model_name == "GPT4o-Prod-Deployment"
+
+
 def test_circuit_breaker_trips_after_consecutive_failures():
     """
     Force several consecutive failures via a mocked client that raises,
