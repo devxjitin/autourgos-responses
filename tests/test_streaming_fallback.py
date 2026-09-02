@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from autourgos_responses import CircuitBreakerOpenException, OpenAIResponse
-from autourgos_responses.response import OpenAIResponseAPIError
+from autourgos_responses.response import OpenAIResponseAPIError, OpenAIResponseDeadlineExceededError
 
 
 def _make_response(model="gpt-4o", **kwargs):
@@ -134,3 +134,12 @@ def test_astream_failures_trip_the_circuit_breaker():
     with pytest.raises(CircuitBreakerOpenException):
         asyncio.run(run_after_trip())
     async_client.responses.create.assert_not_called()
+
+
+def test_max_call_duration_applies_to_stream():
+    llm = _make_response(max_call_duration=0.0)
+    client = MagicMock()
+    llm._client = client
+    with pytest.raises(OpenAIResponseDeadlineExceededError):
+        list(llm.stream("hi"))
+    client.responses.create.assert_not_called()

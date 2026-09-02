@@ -11,7 +11,11 @@ from pydantic import BaseModel
 
 from autourgos_responses import OpenAIResponse
 from autourgos_responses.llm import FunctionCall
-from autourgos_responses.response import OpenAIResponseAllProvidersFailedError, OpenAIResponseAPIError
+from autourgos_responses.response import (
+    OpenAIResponseAllProvidersFailedError,
+    OpenAIResponseAPIError,
+    OpenAIResponseDeadlineExceededError,
+)
 
 
 def _make_response(model="gpt-4o", **kwargs):
@@ -91,7 +95,7 @@ async def test_ainvoke_structured_returns_validated_instance():
 async def test_async_fallback_to_secondary_provider():
     llm = _make_response(fallback_providers=[{"model": "gpt-4o-mini", "api_key": "sk-fb"}])
 
-    async def fake_attempt(client, params, label):
+    async def fake_attempt(client, params, label, deadline=None):
         if label == "primary":
             raise OpenAIResponseAPIError("primary down")
         return _mock_response_obj("from fallback")
@@ -106,6 +110,16 @@ async def test_async_all_providers_failed():
     llm = _make_response(fallback_providers=[{"model": "gpt-4o-mini", "api_key": "sk-fb"}])
     llm._attempt_async_create = AsyncMock(side_effect=OpenAIResponseAPIError("down"))
     with pytest.raises(OpenAIResponseAllProvidersFailedError):
+        await llm.ainvoke("hi")
+
+
+@pytest.mark.asyncio
+async def test_max_call_duration_applies_to_ainvoke():
+    llm = _make_response(max_retries=3, backoff_factor=1.0, max_call_duration=0.05)
+    async_client = MagicMock()
+    async_client.responses.create = AsyncMock(side_effect=RuntimeError("boom"))
+    llm._async_client = async_client
+    with pytest.raises(OpenAIResponseDeadlineExceededError):
         await llm.ainvoke("hi")
 
 

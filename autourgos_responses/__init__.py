@@ -28,6 +28,7 @@ from .response import (
     OpenAIResponseAPIError,
     OpenAIResponseAllProvidersFailedError,
     OpenAIResponseConfigError,
+    OpenAIResponseDeadlineExceededError,
     OpenAIResponseError,
     OpenAIResponseImportError,
     OpenAIResponseRedactionBlockedError,
@@ -61,6 +62,7 @@ __all__ = [
     "OpenAIResponseValidationError",
     "OpenAIResponseRedactionBlockedError",
     "OpenAIResponseAllProvidersFailedError",
+    "OpenAIResponseDeadlineExceededError",
     # Base types
     "BaseLLM",
     "FunctionCall",

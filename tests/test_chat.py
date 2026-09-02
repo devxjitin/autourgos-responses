@@ -58,7 +58,7 @@ async def test_achat_returns_text():
 def test_chat_falls_back_to_secondary_provider_on_primary_failure():
     llm = _make_response(fallback_providers=[{"model": "gpt-4o-mini", "api_key": "sk-fallback"}])
 
-    def fake_attempt(client, params, label):
+    def fake_attempt(client, params, label, deadline=None):
         if label == "primary":
             raise OpenAIResponseAPIError("primary is down")
         return _mock_response_obj("from fallback")

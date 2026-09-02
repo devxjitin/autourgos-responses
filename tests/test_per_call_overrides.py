@@ -40,7 +40,7 @@ def test_invoke_accepts_per_call_overrides():
     llm = _make_response(temperature=0.7)
     captured = {}
 
-    def fake_attempt(client, params, label):
+    def fake_attempt(client, params, label, deadline=None):
         captured.update(params)
         return _mock_response_obj("ok")
 
@@ -55,7 +55,7 @@ def test_invoke_overrides_cannot_hijack_input_or_model():
     llm = _make_response()
     captured = {}
 
-    def fake_attempt(client, params, label):
+    def fake_attempt(client, params, label, deadline=None):
         captured.update(params)
         return _mock_response_obj("ok")
 
@@ -71,7 +71,7 @@ async def test_ainvoke_accepts_per_call_overrides():
     llm = _make_response()
     captured = {}
 
-    async def fake_attempt(client, params, label):
+    async def fake_attempt(client, params, label, deadline=None):
         captured.update(params)
         return _mock_response_obj("ok")
 
