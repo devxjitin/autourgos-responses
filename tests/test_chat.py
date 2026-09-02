@@ -30,7 +30,9 @@ def _mock_response_obj(text="ok", input_tokens=10, output_tokens=5):
 
 def test_chat_returns_text():
     llm = _make_response()
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj("hi there"), "primary"))
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_response_obj("hi there"), "primary", llm._model_name, (None, None))
+    )
 
     result = llm.chat([{"role": "user", "content": "hello"}])
 
@@ -43,7 +45,7 @@ async def test_achat_returns_text():
     llm = _make_response()
 
     async def fake_acreate_across_providers(params):
-        return _mock_response_obj("hi async"), "primary"
+        return _mock_response_obj("hi async"), "primary", llm._model_name, (None, None)
 
     llm._acreate_across_providers = fake_acreate_across_providers
 
@@ -84,7 +86,7 @@ def test_chat_redacts_pii_before_sending():
 
     def fake_create_across_providers(params):
         captured["input"] = params["input"]
-        return _mock_response_obj(), "primary"
+        return _mock_response_obj(), "primary", llm._model_name, (None, None)
 
     llm._create_across_providers = fake_create_across_providers
     llm.chat([{"role": "user", "content": "my email is jane@example.com"}])
@@ -97,7 +99,9 @@ def test_chat_redacts_pii_before_sending():
 
 def test_chat_redact_mode_block_raises():
     llm = _make_response(redact_pii=True, redact_mode="block")
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary"))
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_response_obj(), "primary", llm._model_name, (None, None))
+    )
 
     with pytest.raises(OpenAIResponseRedactionBlockedError):
         llm.chat([{"role": "user", "content": "my email is jane@example.com"}])
@@ -107,7 +111,12 @@ def test_chat_redact_mode_block_raises():
 def test_chat_blocked_once_session_budget_exceeded():
     llm = _make_response(input_pricing=1_000_000.0, output_pricing=1_000_000.0, max_session_cost=100.0)
     llm._create_across_providers = MagicMock(
-        return_value=(_mock_response_obj(input_tokens=100, output_tokens=50), "primary")
+        return_value=(
+            _mock_response_obj(input_tokens=100, output_tokens=50),
+            "primary",
+            llm._model_name,
+            (llm.input_pricing, llm.output_pricing),
+        )
     )
 
     # First call costs $100 (input) + $50 (output) = $150, exceeding the $100 cap.

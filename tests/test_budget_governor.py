@@ -30,7 +30,9 @@ def test_max_session_cost_requires_pricing():
 
 def test_budget_exceeded_after_cap_reached():
     llm = _make_response(input_pricing=1_000_000.0, output_pricing=1_000_000.0, max_session_cost=100.0)
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary"))
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_response_obj(), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing))
+    )
 
     # First call costs $100 (input) + $50 (output) = $150, exceeding the $100 cap.
     llm.invoke("hi")
@@ -42,7 +44,9 @@ def test_budget_exceeded_after_cap_reached():
 
 def test_reset_session_budget_unblocks():
     llm = _make_response(input_pricing=1_000_000.0, output_pricing=1_000_000.0, max_session_cost=100.0)
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary"))
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_response_obj(), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing))
+    )
 
     llm.invoke("hi")
     with pytest.raises(BudgetExceededException):

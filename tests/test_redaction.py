@@ -29,7 +29,7 @@ def test_redact_pii_masks_outgoing_prompt():
 
     def fake_create_across_providers(params):
         captured["input"] = params["input"]
-        return _mock_response_obj(), "primary"
+        return _mock_response_obj(), "primary", llm._model_name, (None, None)
 
     llm._create_across_providers = fake_create_across_providers
     llm.invoke("my email is jane@example.com")
@@ -41,7 +41,7 @@ def test_redact_pii_masks_outgoing_prompt():
 
 def test_redact_mode_block_raises():
     llm = _make_response(redact_pii=True, redact_mode="block")
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary", llm._model_name, (None, None)))
 
     with pytest.raises(OpenAIResponseRedactionBlockedError):
         llm.invoke("my email is jane@example.com")
@@ -54,7 +54,7 @@ def test_no_redaction_when_disabled():
 
     def fake_create_across_providers(params):
         captured["input"] = params["input"]
-        return _mock_response_obj(), "primary"
+        return _mock_response_obj(), "primary", llm._model_name, (None, None)
 
     llm._create_across_providers = fake_create_across_providers
     llm.invoke("my email is jane@example.com")

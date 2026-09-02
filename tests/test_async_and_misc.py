@@ -46,7 +46,9 @@ TOOLS = [{"name": "get_weather", "description": "d", "parameters": {"type": "obj
 @pytest.mark.asyncio
 async def test_ainvoke_basic():
     llm = _make_response()
-    llm._acreate_across_providers = AsyncMock(return_value=(_mock_response_obj("async hi"), "primary"))
+    llm._acreate_across_providers = AsyncMock(
+        return_value=(_mock_response_obj("async hi"), "primary", llm._model_name, (None, None))
+    )
     text = await llm.ainvoke("hello")
     assert text == "async hi"
 
@@ -54,7 +56,9 @@ async def test_ainvoke_basic():
 @pytest.mark.asyncio
 async def test_ainvoke_with_tools_parses_function_call():
     llm = _make_response()
-    llm._acreate_across_providers = AsyncMock(return_value=(_mock_tool_call_response(), "primary"))
+    llm._acreate_across_providers = AsyncMock(
+        return_value=(_mock_tool_call_response(), "primary", llm._model_name, (None, None))
+    )
     result = await llm.ainvoke_with_tools("weather?", TOOLS)
     assert result.has_tool_calls
     assert result.tool_calls == [FunctionCall(name="get_weather", arguments={"city": "Paris"}, call_id="call_1")]
@@ -63,7 +67,9 @@ async def test_ainvoke_with_tools_parses_function_call():
 @pytest.mark.asyncio
 async def test_ainvoke_with_tools_accepts_per_call_overrides():
     llm = _make_response()
-    llm._acreate_across_providers = AsyncMock(return_value=(_mock_response_obj("ok"), "primary"))
+    llm._acreate_across_providers = AsyncMock(
+        return_value=(_mock_response_obj("ok"), "primary", llm._model_name, (None, None))
+    )
     await llm.ainvoke_with_tools("hi", TOOLS, temperature=0.2, max_output_tokens=64)
     sent_params = llm._acreate_across_providers.call_args[0][0]
     assert sent_params["temperature"] == 0.2
@@ -73,7 +79,9 @@ async def test_ainvoke_with_tools_accepts_per_call_overrides():
 @pytest.mark.asyncio
 async def test_ainvoke_structured_returns_validated_instance():
     llm = _make_response(output_schema=Answer)
-    llm._acreate_across_providers = AsyncMock(return_value=(_mock_response_obj('{"value": 9}'), "primary"))
+    llm._acreate_across_providers = AsyncMock(
+        return_value=(_mock_response_obj('{"value": 9}'), "primary", llm._model_name, (None, None))
+    )
     result = await llm.ainvoke_structured("give a number")
     assert isinstance(result, Answer)
     assert result.value == 9
@@ -104,7 +112,9 @@ async def test_async_all_providers_failed():
 @pytest.mark.asyncio
 async def test_async_shadow_dispatch():
     llm = _make_response(shadow_providers=[{"model": "gpt-4o-mini", "api_key": "sk-shadow"}])
-    llm._acreate_across_providers = AsyncMock(return_value=(_mock_response_obj("primary answer"), "primary"))
+    llm._acreate_across_providers = AsyncMock(
+        return_value=(_mock_response_obj("primary answer"), "primary", llm._model_name, (None, None))
+    )
 
     shadow_client = MagicMock()
     shadow_client.responses.create = AsyncMock(return_value=_mock_response_obj("primary answer"))
@@ -123,6 +133,8 @@ def test_redact_restore_in_response_restores_output_text():
         side_effect=lambda params: (
             _mock_response_obj(f"Sure, I noted {params['input']}"),
             "primary",
+            llm._model_name,
+            (None, None),
         )
     )
     text = llm.invoke("my email is jane@example.com")
@@ -136,7 +148,9 @@ def test_ledger_records_shadow_calls_table(tmp_path):
         ledger_path=ledger_path,
         shadow_providers=[{"model": "gpt-4o-mini", "api_key": "sk-shadow"}],
     )
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj("primary"), "primary"))
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_response_obj("primary"), "primary", llm._model_name, (None, None))
+    )
     shadow_client = MagicMock()
     shadow_client.responses.create.return_value = _mock_response_obj("primary")
     llm._get_shadow_sync_client = MagicMock(return_value=shadow_client)
@@ -157,7 +171,7 @@ def test_extra_body_merged_into_params():
 
     def fake_create_across_providers(params):
         captured["params"] = params
-        return _mock_response_obj(), "primary"
+        return _mock_response_obj(), "primary", llm._model_name, (None, None)
 
     llm._create_across_providers = fake_create_across_providers
     llm.invoke("hi")
@@ -176,7 +190,10 @@ def test_context_manager_closes_ledger(tmp_path):
 def test_batch_invoke_runs_sequentially():
     llm = _make_response()
     llm._create_across_providers = MagicMock(
-        side_effect=[(_mock_response_obj("a"), "primary"), (_mock_response_obj("b"), "primary")]
+        side_effect=[
+            (_mock_response_obj("a"), "primary", llm._model_name, (None, None)),
+            (_mock_response_obj("b"), "primary", llm._model_name, (None, None)),
+        ]
     )
     results = llm.batch_invoke(["p1", "p2"])
     assert results == ["a", "b"]

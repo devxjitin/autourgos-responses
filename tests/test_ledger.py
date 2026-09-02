@@ -24,7 +24,7 @@ def _mock_response_obj(text="hello"):
 def test_ledger_records_a_call(tmp_path):
     ledger_path = str(tmp_path / "ledger.db")
     llm = _make_response(ledger_path=ledger_path)
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary", llm._model_name, (None, None)))
 
     llm.invoke("hello there")
 
@@ -43,7 +43,7 @@ def test_ledger_records_a_call(tmp_path):
 def test_ledger_store_content_false_omits_text(tmp_path):
     ledger_path = str(tmp_path / "ledger.db")
     llm = _make_response(ledger_path=ledger_path, ledger_store_content=False)
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj(), "primary", llm._model_name, (None, None)))
 
     llm.invoke("secret prompt")
 

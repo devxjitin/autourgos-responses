@@ -44,7 +44,7 @@ TOOLS = [{"name": "get_weather", "description": "Get the weather", "parameters":
 
 def test_invoke_with_tools_parses_function_call():
     llm = _make_response()
-    llm._create_across_providers = MagicMock(return_value=(_mock_tool_call_response(), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_tool_call_response(), "primary", llm._model_name, (None, None)))
 
     result = llm.invoke_with_tools("What's the weather in Paris?", TOOLS)
 
@@ -76,7 +76,7 @@ def test_invoke_with_tools_malformed_arguments_json_falls_back_to_empty_dict():
     resp.usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
 
     llm = _make_response()
-    llm._create_across_providers = MagicMock(return_value=(resp, "primary"))
+    llm._create_across_providers = MagicMock(return_value=(resp, "primary", llm._model_name, (None, None)))
 
     result = llm.invoke_with_tools("What's the weather?", TOOLS)
 
@@ -87,7 +87,7 @@ def test_invoke_with_tools_malformed_arguments_json_falls_back_to_empty_dict():
 
 def test_invoke_with_tools_accepts_per_call_overrides():
     llm = _make_response(temperature=0.7)
-    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary", llm._model_name, (None, None)))
 
     llm.invoke_with_tools("hi", TOOLS, temperature=0.1, max_output_tokens=64)
 
@@ -98,7 +98,7 @@ def test_invoke_with_tools_accepts_per_call_overrides():
 
 def test_invoke_with_tools_returns_text_when_no_tool_call():
     llm = _make_response()
-    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary", llm._model_name, (None, None)))
 
     result = llm.invoke_with_tools("What's the weather in Paris?", TOOLS)
 
@@ -115,7 +115,7 @@ def test_invoke_with_tools_rejects_files_with_list_prompt():
     reaching the API.
     """
     llm = _make_response()
-    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary", llm._model_name, (None, None)))
     with pytest.raises(OpenAIResponseConfigError):
         llm.invoke_with_tools([{"role": "user", "content": "hi"}], TOOLS, files=["img.png"])
     llm._create_across_providers.assert_not_called()
@@ -123,6 +123,6 @@ def test_invoke_with_tools_rejects_files_with_list_prompt():
 
 def test_invoke_with_tools_rejects_empty_list_prompt():
     llm = _make_response()
-    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary", llm._model_name, (None, None)))
     with pytest.raises(ValueError):
         llm.invoke_with_tools([], TOOLS)

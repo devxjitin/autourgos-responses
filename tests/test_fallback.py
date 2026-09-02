@@ -55,3 +55,60 @@ def test_missing_model_key_in_fallback_config_raises():
 
     with pytest.raises(OpenAIResponseConfigError):
         _make_response(fallback_providers=[{"api_key": "sk-no-model"}])
+
+
+def test_fallback_metadata_reports_its_own_model_not_the_primarys():
+    """Regression: llm.last_metadata['model'] must reflect whichever provider
+    actually answered, not always the primary's model name."""
+    llm = _make_response(fallback_providers=[{"model": "gpt-4o-mini", "api_key": "sk-fallback"}])
+
+    def fake_attempt(client, params, label):
+        if label == "primary":
+            raise OpenAIResponseAPIError("primary is down")
+        return _mock_response_obj("from fallback")
+
+    llm._attempt_sync_create = fake_attempt
+    llm.invoke("hello")
+    assert llm.last_metadata["model"] == "gpt-4o-mini"
+
+
+def test_fallback_cost_uses_its_own_pricing_not_the_primarys():
+    """Regression: cost for a fallback response must come from that fallback
+    entry's own pricing, not the primary's (different model, different price)."""
+    llm = _make_response(
+        input_pricing=1000, output_pricing=1000,
+        fallback_providers=[
+            {"model": "gpt-4o-mini", "api_key": "sk-fallback", "input_pricing": 1.0, "output_pricing": 2.0}
+        ],
+    )
+
+    def fake_attempt(client, params, label):
+        if label == "primary":
+            raise OpenAIResponseAPIError("primary is down")
+        resp = MagicMock()
+        resp.output = [{"type": "message", "content": [{"text": "from fallback"}]}]
+        resp.usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+        return resp
+
+    llm._attempt_sync_create = fake_attempt
+    llm.invoke("hello")
+    expected = (10 / 1_000_000) * 1.0 + (5 / 1_000_000) * 2.0
+    assert llm.last_metadata["total_cost"] == pytest.approx(expected)
+
+
+def test_fallback_without_its_own_pricing_omits_cost():
+    """A fallback entry with no pricing of its own must not silently borrow
+    the primary's price for a different model — cost fields stay unset."""
+    llm = _make_response(
+        input_pricing=1000, output_pricing=1000,
+        fallback_providers=[{"model": "gpt-4o-mini", "api_key": "sk-fallback"}],
+    )
+
+    def fake_attempt(client, params, label):
+        if label == "primary":
+            raise OpenAIResponseAPIError("primary is down")
+        return _mock_response_obj("from fallback")
+
+    llm._attempt_sync_create = fake_attempt
+    llm.invoke("hello")
+    assert "total_cost" not in llm.last_metadata

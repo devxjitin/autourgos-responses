@@ -42,7 +42,9 @@ def test_incompatible_with_streaming():
 
 def test_invoke_structured_returns_validated_instance():
     llm = _make_response(output_schema=Answer)
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj('{"value": 42}'), "primary"))
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_response_obj('{"value": 42}'), "primary", llm._model_name, (None, None))
+    )
 
     result = llm.invoke_structured("give me a number")
     assert isinstance(result, Answer)
@@ -54,7 +56,12 @@ def test_invoke_structured_retries_then_succeeds():
     llm = _make_response(output_schema=Answer, max_retries=1)
     bad = _mock_response_obj("not json")
     good = _mock_response_obj('{"value": 7}')
-    llm._create_across_providers = MagicMock(side_effect=[(bad, "primary"), (good, "primary")])
+    llm._create_across_providers = MagicMock(
+        side_effect=[
+            (bad, "primary", llm._model_name, (None, None)),
+            (good, "primary", llm._model_name, (None, None)),
+        ]
+    )
 
     result = llm.invoke_structured("give me a number", max_validation_retries=1)
     assert isinstance(result, Answer)
@@ -65,7 +72,7 @@ def test_invoke_structured_retries_then_succeeds():
 def test_invoke_structured_raises_after_exhausting_retries():
     llm = _make_response(output_schema=Answer, max_retries=1)
     bad = _mock_response_obj("not json")
-    llm._create_across_providers = MagicMock(return_value=(bad, "primary"))
+    llm._create_across_providers = MagicMock(return_value=(bad, "primary", llm._model_name, (None, None)))
 
     with pytest.raises(OpenAIResponseValidationError):
         llm.invoke_structured("give me a number", max_validation_retries=1)

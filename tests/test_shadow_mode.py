@@ -4,6 +4,8 @@ Tests for shadow-mode dual dispatch ported from autourgos-openaichat.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from autourgos_responses import OpenAIResponse
 
 
@@ -22,7 +24,7 @@ def _mock_response_obj(text):
 
 def test_shadow_dispatch_populates_last_shadow_results():
     llm = _make_response(shadow_providers=[{"model": "gpt-4o-mini", "api_key": "sk-shadow"}])
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj("primary answer"), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj("primary answer"), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing)))
 
     shadow_client = MagicMock()
     shadow_client.responses.create.return_value = _mock_response_obj("primary answer")
@@ -40,7 +42,7 @@ def test_shadow_dispatch_populates_last_shadow_results():
 
 def test_shadow_dispatch_records_error_without_failing_primary():
     llm = _make_response(shadow_providers=[{"model": "gpt-4o-mini", "api_key": "sk-shadow"}])
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj("primary answer"), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj("primary answer"), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing)))
 
     shadow_client = MagicMock()
     shadow_client.responses.create.side_effect = RuntimeError("shadow down")
@@ -52,13 +54,57 @@ def test_shadow_dispatch_records_error_without_failing_primary():
     assert llm.last_shadow_results[0]["error"] is not None
 
 
+def test_shadow_cost_uses_its_own_pricing_not_the_primarys():
+    """A shadow provider's cost must come from its own pricing, not the primary's."""
+    llm = _make_response(
+        input_pricing=1000, output_pricing=1000,
+        shadow_providers=[{
+            "model": "gpt-4o-mini", "api_key": "sk-shadow",
+            "input_pricing": 1.0, "output_pricing": 2.0,
+        }],
+    )
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_response_obj("primary answer"), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing))
+    )
+
+    shadow_resp = MagicMock()
+    shadow_resp.output = [{"type": "message", "content": [{"text": "primary answer"}]}]
+    shadow_resp.usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+    shadow_client = MagicMock()
+    shadow_client.responses.create.return_value = shadow_resp
+    llm._get_shadow_sync_client = MagicMock(return_value=shadow_client)
+
+    llm.invoke("hello")
+    expected = (10 / 1_000_000) * 1.0 + (5 / 1_000_000) * 2.0
+    assert llm.last_shadow_results[0]["total_cost"] == pytest.approx(expected)
+
+
+def test_shadow_without_its_own_pricing_omits_cost():
+    """A shadow entry with no pricing of its own must not silently borrow the
+    primary's price for a different model — cost stays unset."""
+    llm = _make_response(
+        input_pricing=1000, output_pricing=1000,
+        shadow_providers=[{"model": "gpt-4o-mini", "api_key": "sk-shadow"}],
+    )
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_response_obj("primary answer"), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing))
+    )
+
+    shadow_client = MagicMock()
+    shadow_client.responses.create.return_value = _mock_response_obj("primary answer")
+    llm._get_shadow_sync_client = MagicMock(return_value=shadow_client)
+
+    llm.invoke("hello")
+    assert llm.last_shadow_results[0]["total_cost"] is None
+
+
 def test_on_shadow_result_callback_invoked():
     callback = MagicMock()
     llm = _make_response(
         shadow_providers=[{"model": "gpt-4o-mini", "api_key": "sk-shadow"}],
         on_shadow_result=callback,
     )
-    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj("primary answer"), "primary"))
+    llm._create_across_providers = MagicMock(return_value=(_mock_response_obj("primary answer"), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing)))
 
     shadow_client = MagicMock()
     shadow_client.responses.create.return_value = _mock_response_obj("primary answer")
