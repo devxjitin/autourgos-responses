@@ -2,6 +2,8 @@
 Tests for the budget governor ported from autourgos-openaichat's BaseLLM.
 """
 
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,6 +42,47 @@ def test_budget_exceeded_after_cap_reached():
 
     with pytest.raises(BudgetExceededException):
         llm.invoke("hi again")
+
+
+def test_budget_admission_serializes_concurrent_invocations():
+    """
+    Regression: concurrent invoke() calls sharing a capped instance must not
+    all pass the budget check before any of them records cost. Without
+    admission control, N threads racing a cap that a single call's cost
+    alone exceeds could all slip through before the first one's cost is
+    recorded. With admission control serializing them, only the first one
+    admitted succeeds -- every other thread must observe the now-exceeded
+    budget and raise.
+    """
+    llm = _make_response(input_pricing=1_000_000.0, output_pricing=1_000_000.0, max_session_cost=1.0)
+
+    def slow_create(params):
+        time.sleep(0.05)  # simulate real API latency, widening the race window
+        pricing = (llm.input_pricing, llm.output_pricing)
+        return _mock_response_obj(), "primary", llm._model_name, pricing  # cost $150, well over the $1 cap
+
+    llm._create_across_providers = slow_create
+
+    results = []
+    results_lock = threading.Lock()
+
+    def worker() -> None:
+        try:
+            llm.invoke("hi")
+            outcome = "ok"
+        except BudgetExceededException:
+            outcome = "blocked"
+        with results_lock:
+            results.append(outcome)
+
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert results.count("ok") == 1
+    assert results.count("blocked") == 4
 
 
 def test_reset_session_budget_unblocks():
