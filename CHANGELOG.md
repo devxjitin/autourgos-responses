@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.3.1] - 2026-09-01
+
+- Metadata: added `maintainers` (Sonia, Vishwanil Suman) to `pyproject.toml`,
+  and linked the README's existing Sonia contributor badge to her GitHub
+  profile (https://github.com/dahiyasonia). No code changes.
+
 ## [2.3.0] - 2026-09-01
 
 - Added: `extract_tool_calls_from_response` now includes

@@ -4,13 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autourgos-responses"
-version = "2.3.0"
+version = "2.3.1"
 description = "Autourgos LLM wrapper for the OpenAI Responses API"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
     { name = "Jitin Kumar Sengar", email = "devxjitin@gmail.com" },
+]
+maintainers = [
+    {name = "Sonia"},
+    {name = "Vishwanil Suman"},
 ]
 keywords = [
     "autourgos", "openai", "llm", "responses",
