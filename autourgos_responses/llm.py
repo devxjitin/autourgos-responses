@@ -17,6 +17,7 @@ from autourgos_openaichat import (
     BudgetExceededException,
     CircuitBreakerOpenException,
     FunctionCall,
+    NonTransientError,
     ToolCallResponse,
 )
 
@@ -26,4 +27,5 @@ __all__ = [
     "ToolCallResponse",
     "CircuitBreakerOpenException",
     "BudgetExceededException",
+    "NonTransientError",
 ]
