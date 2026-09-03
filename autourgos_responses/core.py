@@ -26,6 +26,7 @@ from autourgos_openaichat.core import (
     configure_async_openai_client,
     configure_openai_client,
     load_openai_module,
+    model_requires_max_completion_tokens,
     normalize_model_name,
     release_async_openai_client,
     release_openai_client,
@@ -40,8 +41,39 @@ logger = logging.getLogger(__name__)
 
 # ── Reasoning / text config ───────────────────────────────────────────────────
 
-_VALID_REASONING_EFFORTS = {"low", "medium", "high"}
+_VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 _VALID_TEXT_VERBOSITIES = {"low", "medium", "high"}
+
+
+def strip_unsupported_sampling_params(params: Dict[str, Any], model_name: str) -> None:
+    """
+    Drop ``temperature``/``top_p`` from ``params`` in place if ``model_name``
+    is an o-series reasoning model -- those models reject both params
+    outright (400). Reuses ``model_requires_max_completion_tokens()`` from
+    autourgos-openaichat.core for the model-family detection (same o-series
+    regex, no need to duplicate it) but logs through this package's own
+    logger, kept local for the same reason as ``logger`` above.
+
+    Called at the same per-target sites as the model name is swapped in --
+    params are built once before it's known which target (primary/
+    fallback[i]/shadow[i]) will actually receive the request, and a
+    fallback/shadow can be a different model family than the primary.
+
+    Dropped rather than raised, so a caller with temperature/top_p set for a
+    non-reasoning primary (with an o-series fallback configured, say) doesn't
+    get a hard failure -- just a warning and the call proceeds without them.
+    """
+    if not model_requires_max_completion_tokens(model_name):
+        return
+    for key in ("temperature", "top_p"):
+        if key in params:
+            del params[key]
+            logger.warning(
+                "%s doesn't support %r -- dropped from the request instead of "
+                "sending it and getting a 400 (o-series reasoning models reject "
+                "temperature/top_p entirely).",
+                model_name, key,
+            )
 
 
 def normalize_reasoning_effort(effort: Optional[str]) -> Optional[str]:
@@ -127,6 +159,38 @@ def build_text_config(
 
 # ── Multi-modal prompt building ───────────────────────────────────────────────
 
+# The only image formats OpenAI vision (Chat Completions and Responses API
+# alike) actually supports -- everything else the provider will reject
+# regardless of what MIME type we send. Kept in sync with the identical
+# table in autourgos_openaichat.core (not imported from there, to avoid
+# entangling this package's image encoding with openaichat's beyond what's
+# already shared -- see that module's docstring for the full rationale).
+_IMAGE_EXTENSION_MIME_TYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "png": "image/png",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def _guess_image_mime_type(file_path: str, ext: str) -> str:
+    """
+    Map a file extension to its correct image MIME type for vision input.
+    See autourgos_openaichat.core._guess_image_mime_type for the full
+    rationale (same fix, mirrored here).
+    """
+    mime = _IMAGE_EXTENSION_MIME_TYPES.get(ext)
+    if mime is not None:
+        return mime
+    logger.warning(
+        "_encode_file_part: %r has extension %r, which isn't a recognized "
+        "image type (supported: png, jpg/jpeg, gif, webp). Sending as "
+        "image/%s anyway, but the provider will likely reject it.",
+        file_path, ext, ext,
+    )
+    return f"image/{ext}"
+
+
 def _encode_file_part(file: Any) -> Optional[Dict[str, Any]]:
     """Encode a file into a Responses API image input part."""
     if isinstance(file, bytes):
@@ -140,7 +204,7 @@ def _encode_file_part(file: Any) -> Optional[Dict[str, Any]]:
             with open(file, "rb") as fh:
                 raw = fh.read()
             ext = file.rsplit(".", 1)[-1].lower() if "." in file else "png"
-            mime = f"image/{ext}"
+            mime = _guess_image_mime_type(file, ext)
             data = base64.b64encode(raw).decode()
             return {
                 "type": "input_image",
@@ -232,10 +296,12 @@ def build_responses_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     Responses API tool schema is flat: ``{"type": "function", "name", ...}``.
     """
     result: List[Dict[str, Any]] = []
-    for t in tools:
+    for i, t in enumerate(tools):
         if t.get("type") == "function" and "name" in t:
             result.append(t)
             continue
+        if not t.get("name"):
+            raise ValueError(f"Tool at index {i} is missing a 'name' key: {t!r}")
         result.append({
             "type": "function",
             "name": t["name"],
@@ -303,28 +369,32 @@ def extract_text_delta_from_event(event: Any) -> Optional[str]:
         if isinstance(delta, str):
             return delta
 
-    # Also handle content_block_delta style (defensive)
-    if event_type == "content_block_delta":
-        delta_obj = getattr(event, "delta", None)
-        if delta_obj:
-            text = getattr(delta_obj, "text", None)
-            if isinstance(text, str):
-                return text
-
-    # Chat-style delta (if model ever returns it)
-    choices = getattr(event, "choices", None)
-    if choices:
-        delta = getattr(choices[0], "delta", None)
-        if delta:
-            content = getattr(delta, "content", None)
-            if isinstance(content, str):
-                return content
-
     if isinstance(event, dict):
         delta = event.get("delta")
         if isinstance(delta, str):
             return delta
 
+    return None
+
+
+def extract_final_response_from_stream_event(event: Any) -> Optional[Any]:
+    """
+    Return the embedded, fully-populated ``Response`` object (the one that
+    carries ``.usage``) from a terminal Responses API streaming event, or
+    ``None`` for any other event.
+
+    Unlike Chat Completions, the Responses API's ``response.completed``
+    (and ``response.incomplete``, e.g. on a max_output_tokens truncation)
+    event already carries the complete ``Response`` object -- no
+    ``stream_options`` opt-in needed. This is how a streaming caller
+    (``invoke(streaming=True)``) recovers token/cost data, since no
+    delta-only event carries usage.
+    """
+    event_type = getattr(event, "type", None) or (event.get("type") if isinstance(event, dict) else None)
+    if event_type in ("response.completed", "response.incomplete"):
+        response = getattr(event, "response", None) or (event.get("response") if isinstance(event, dict) else None)
+        if response is not None:
+            return response
     return None
 
 
@@ -340,11 +410,13 @@ __all__ = [
     "normalize_model_name",
     "normalize_reasoning_effort",
     "normalize_text_verbosity",
+    "strip_unsupported_sampling_params",
     "build_reasoning_config",
     "build_text_config",
     "build_multimodal_prompt",
     "build_response_create_params",
     "extract_text_delta_from_event",
+    "extract_final_response_from_stream_event",
     "build_responses_tools",
     "extract_tool_calls_from_response",
 ]

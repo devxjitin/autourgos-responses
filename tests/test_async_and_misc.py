@@ -140,6 +140,31 @@ async def test_async_shadow_dispatch():
     assert llm.last_shadow_results[0]["similarity"] == 1.0
 
 
+@pytest.mark.asyncio
+async def test_ainvoke_shadow_still_fires_and_is_logged_when_primary_fails():
+    """
+    Regression test: since shadow dispatch now starts before the primary's
+    own request (to achieve real concurrency), an in-flight shadow request
+    can no longer be silently skipped if the primary ends up failing. Its
+    result must still be collected and logged, and the primary's own
+    exception must still propagate correctly to the caller.
+    """
+    llm = _make_response(shadow_providers=[{"model": "gpt-4o-mini", "api_key": "sk-shadow"}], max_retries=1)
+    llm._acreate_across_providers = AsyncMock(side_effect=RuntimeError("primary down"))
+
+    shadow_client = MagicMock()
+    shadow_client.responses.create = AsyncMock(return_value=_mock_response_obj("shadow-answer"))
+    llm._get_shadow_async_client = MagicMock(return_value=shadow_client)
+
+    with pytest.raises(RuntimeError):
+        await llm.ainvoke("hello")
+
+    assert len(llm.last_shadow_results) == 1
+    shadow = llm.last_shadow_results[0]
+    assert shadow["response"] == "shadow-answer"
+    assert shadow["similarity"] is None
+
+
 def test_redact_restore_in_response_restores_output_text():
     llm = _make_response(redact_pii=True, redact_restore_in_response=True)
     # Model echoes the placeholder back in its response.
@@ -154,6 +179,43 @@ def test_redact_restore_in_response_restores_output_text():
     text = llm.invoke("my email is jane@example.com")
     assert "jane@example.com" in text
     assert "[REDACTED:email]" not in text
+
+
+@pytest.mark.asyncio
+async def test_redact_restore_concurrent_ainvoke_never_cross_contaminates():
+    """
+    Regression test: _apply_redaction()/_resolve_prompt() used to write the
+    redaction map to shared instance attributes (self._last_redaction_map),
+    so two concurrent ainvoke() calls sharing one instance could restore
+    using each other's mapping -- e.g. user A's response getting user B's
+    secret spliced in if B's call happened to finish first. The fix makes
+    the redaction map call-local (threaded through the return value), so
+    each call must always restore its own secret regardless of completion
+    order.
+    """
+    import asyncio
+
+    llm = _make_response(redact_pii=True, redact_categories=["email"], redact_restore_in_response=True)
+
+    async def fake_acreate(params):
+        content = params["input"]
+        # Whichever call is for "userA" resolves *last*, well after "userB" --
+        # if redaction state were shared, userA's restore would race against
+        # userB's already-overwritten mapping.
+        await asyncio.sleep(0.05 if "userA" in content else 0.01)
+        placeholder = "[REDACTED:email:1]"
+        return _mock_response_obj(f"Confirming contact: {placeholder}"), "primary", llm._model_name, (None, None)
+
+    llm._acreate_across_providers = fake_acreate
+
+    results = await asyncio.gather(
+        llm.ainvoke("userA email is alice-private@corp.internal"),
+        llm.ainvoke("userB email is bob-private@corp.internal"),
+    )
+    assert results[0] == "Confirming contact: alice-private@corp.internal"
+    assert results[1] == "Confirming contact: bob-private@corp.internal"
+    assert "bob-private@corp.internal" not in results[0]
+    assert "alice-private@corp.internal" not in results[1]
 
 
 def test_ledger_records_shadow_calls_table(tmp_path):

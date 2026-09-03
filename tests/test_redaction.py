@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from autourgos_responses import OpenAIResponse
-from autourgos_responses.response import OpenAIResponseRedactionBlockedError
+from autourgos_responses.response import OpenAIResponseConfigError, OpenAIResponseRedactionBlockedError
 
 
 def _make_response(model="gpt-4o", **kwargs):
@@ -46,6 +46,18 @@ def test_redact_mode_block_raises():
     with pytest.raises(OpenAIResponseRedactionBlockedError):
         llm.invoke("my email is jane@example.com")
     llm._create_across_providers.assert_not_called()
+
+
+def test_invalid_custom_regex_raises_config_error_not_raw_re_error():
+    """
+    Regression: re.error is not a ValueError subclass, so a malformed
+    redact_custom_patterns regex used to bypass the constructor's
+    `except ValueError` guard entirely and leak out as a raw re.error
+    instead of the library's own OpenAIResponseConfigError. Same root cause
+    as autourgos-openaichat -- both packages share compile_patterns().
+    """
+    with pytest.raises(OpenAIResponseConfigError):
+        _make_response(redact_pii=True, redact_custom_patterns={"bad": "(unbalanced"})
 
 
 def test_no_redaction_when_disabled():

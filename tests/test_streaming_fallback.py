@@ -4,11 +4,12 @@ fails before emitting any chunk.
 """
 
 import asyncio
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from autourgos_responses import CircuitBreakerOpenException, OpenAIResponse
+from autourgos_responses import BudgetExceededException, CircuitBreakerOpenException, OpenAIResponse
 from autourgos_responses.response import OpenAIResponseAPIError, OpenAIResponseDeadlineExceededError
 
 
@@ -22,6 +23,21 @@ class _Event:
     def __init__(self, delta):
         self.type = "response.output_text.delta"
         self.delta = delta
+
+
+class _Usage:
+    def __init__(self, input_tokens=9, output_tokens=10, total_tokens=19):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.total_tokens = total_tokens
+
+
+class _CompletedEvent:
+    """The terminal event carrying the full Response (with .usage) -- see
+    extract_final_response_from_stream_event()."""
+    def __init__(self, usage=None):
+        self.type = "response.completed"
+        self.response = MagicMock(usage=usage or _Usage())
 
 
 def test_stream_falls_back_before_any_chunk_emitted():
@@ -143,3 +159,98 @@ def test_max_call_duration_applies_to_stream():
     with pytest.raises(OpenAIResponseDeadlineExceededError):
         list(llm.stream("hi"))
     client.responses.create.assert_not_called()
+
+
+def _read_ledger_rows(db_path):
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute("SELECT * FROM calls ORDER BY id").fetchall()]
+    conn.close()
+    return rows
+
+
+def test_invoke_streaming_tracks_budget_cost_and_ledger(tmp_path):
+    """
+    Regression test: invoke(streaming=True) used to bypass budget admission,
+    cost tracking, and the ledger entirely -- max_session_cost was silently
+    inert for streaming calls, and streaming calls never appeared in the
+    audit ledger. The terminal response.completed event (which already
+    carries the full Response with .usage on the Responses API, no
+    stream_options opt-in needed) now lets the streaming path compute cost
+    and log to the ledger exactly like the non-streaming path.
+    """
+    db_path = tmp_path / "calls.db"
+    llm = _make_response(
+        streaming=True, input_pricing=1000, output_pricing=1000,
+        max_session_cost=0.01, ledger_path=str(db_path),
+    )
+    llm._client = MagicMock()
+    llm._client.responses.create.return_value = iter([_Event("Hello"), _CompletedEvent()])
+
+    assert llm.invoke("hi") == "Hello"
+    assert llm.session_cost_used >= 0.01  # (9/1e6)*1000 + (10/1e6)*1000 = 0.019
+    assert llm.last_metadata["total_tokens"] == 19
+
+    row = _read_ledger_rows(db_path)[0]
+    assert row["call_type"] == "invoke"
+    assert row["total_tokens"] == 19
+
+    with pytest.raises(BudgetExceededException):
+        llm.invoke("hi again")
+
+
+def test_invoke_streaming_restores_redacted_text():
+    """redact_restore_in_response must apply on the streaming invoke() path too --
+    it used to be skipped entirely, since streaming short-circuited before that code ran."""
+    llm = _make_response(streaming=True, redact_pii=True, redact_categories=["email"],
+                          redact_restore_in_response=True)
+    llm._client = MagicMock()
+    llm._client.responses.create.return_value = iter([
+        _Event("Sure, noted: "), _Event("[REDACTED:email:1]"), _CompletedEvent(),
+    ])
+    result = llm.invoke("contact bob@example.com please")
+    assert result == "Sure, noted: bob@example.com"
+
+
+def test_invoke_streaming_without_usage_event_degrades_gracefully():
+    """A provider that never sends response.completed still returns text;
+    cost is simply left untracked for that call rather than crashing."""
+    llm = _make_response(streaming=True, input_pricing=1000, output_pricing=1000)
+    llm._client = MagicMock()
+    llm._client.responses.create.return_value = iter([_Event("ok")])  # no terminal event
+
+    assert llm.invoke("hi") == "ok"
+    assert llm.last_metadata.get("total_cost") is None
+    assert llm.session_cost_used == 0.0
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_streaming_tracks_budget_cost_and_ledger(tmp_path):
+    """Async counterpart of test_invoke_streaming_tracks_budget_cost_and_ledger."""
+    db_path = tmp_path / "calls.db"
+    llm = _make_response(
+        streaming=True, input_pricing=1000, output_pricing=1000,
+        max_session_cost=0.01, ledger_path=str(db_path),
+    )
+
+    async def fake_astream():
+        yield _Event("Hello")
+        yield _CompletedEvent()
+
+    async def fake_create(**kwargs):
+        return fake_astream()
+
+    async_client = MagicMock()
+    async_client.responses.create = AsyncMock(side_effect=fake_create)
+    llm._async_client = async_client
+
+    assert await llm.ainvoke("hi") == "Hello"
+    assert llm.session_cost_used >= 0.01
+    assert llm.last_metadata["total_tokens"] == 19
+
+    row = _read_ledger_rows(db_path)[0]
+    assert row["call_type"] == "ainvoke"
+    assert row["total_tokens"] == 19
+
+    with pytest.raises(BudgetExceededException):
+        await llm.ainvoke("hi again")

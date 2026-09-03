@@ -45,7 +45,7 @@ from .model_runtime import (
 )
 
 try:
-    from importlib.metadata import version as _v, PackageNotFoundError
+    from importlib.metadata import version as _v
     __version__ = _v("autourgos-responses")
 except Exception:
     __version__ = "2.4.0"

@@ -13,7 +13,7 @@ openaichat would silently change its behavior.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from autourgos_openaichat.model_runtime import (
     coerce_prompt_variable,
@@ -99,9 +99,14 @@ def extract_text_from_response(resp: Any) -> Optional[str]:
     if isinstance(resp, str) and resp.strip():
         return resp
 
-    # Responses API primary path: output[] list
+    # Responses API primary path: output[] list. A response can carry more than
+    # one "message" item and each item's content[] can carry more than one text
+    # part -- all of them belong to the final text, so every part is collected
+    # and joined (matching how the streaming path joins deltas), instead of
+    # returning only the first fragment found.
     output = resp.get("output") if isinstance(resp, dict) else getattr(resp, "output", None)
     if output:
+        collected: List[str] = []
         for item in (output if isinstance(output, list) else []):
             item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
             if item_type == "message":
@@ -110,7 +115,9 @@ def extract_text_from_response(resp: Any) -> Optional[str]:
                     for part in (content_list if isinstance(content_list, list) else []):
                         text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
                         if isinstance(text, str) and text.strip():
-                            return text
+                            collected.append(text)
+        if collected:
+            return "".join(collected)
 
     # Shortcut: output_text attribute
     output_text = resp.get("output_text") if isinstance(resp, dict) else getattr(resp, "output_text", None)

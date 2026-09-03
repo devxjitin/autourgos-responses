@@ -14,15 +14,18 @@ from __future__ import annotations
 
 from autourgos_openaichat import (
     BaseLLM,
+    BaseProviderLLM,
     BudgetExceededException,
     CircuitBreakerOpenException,
     FunctionCall,
     NonTransientError,
     ToolCallResponse,
 )
+from autourgos_openaichat.llm import _NON_RETRYABLE_STATUS_CODES
 
 __all__ = [
     "BaseLLM",
+    "BaseProviderLLM",
     "FunctionCall",
     "ToolCallResponse",
     "CircuitBreakerOpenException",

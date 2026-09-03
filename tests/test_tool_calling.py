@@ -121,6 +121,18 @@ def test_invoke_with_tools_rejects_files_with_list_prompt():
     llm._create_across_providers.assert_not_called()
 
 
+def test_invoke_with_tools_missing_name_raises_config_error_not_key_error():
+    """
+    Regression: a tool dict missing "name" used to raise a raw, unhelpful
+    KeyError instead of this library's own OpenAIResponseConfigError.
+    """
+    llm = _make_response()
+    llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary", llm._model_name, (None, None)))
+    with pytest.raises(OpenAIResponseConfigError, match="index 0"):
+        llm.invoke_with_tools("hi", [{"description": "missing its name key"}])
+    llm._create_across_providers.assert_not_called()
+
+
 def test_invoke_with_tools_rejects_empty_list_prompt():
     llm = _make_response()
     llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary", llm._model_name, (None, None)))

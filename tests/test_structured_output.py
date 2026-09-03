@@ -2,12 +2,14 @@
 Tests for invoke_structured()/ainvoke_structured() validated structured output.
 """
 
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
 from autourgos_responses import OpenAIResponse
+from autourgos_responses.core import build_text_config
 from autourgos_responses.response import OpenAIResponseConfigError, OpenAIResponseValidationError
 
 
@@ -26,6 +28,37 @@ def _mock_response_obj(text):
     resp.output = [{"type": "message", "content": [{"text": text}]}]
     resp.usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
     return resp
+
+
+def test_strict_schema_requires_every_property_including_optional_and_defaulted():
+    """
+    Regression test (shared fix in autourgos_openaichat.core.
+    enforce_additional_properties_false, reused here via build_text_config):
+    OpenAI/Azure strict json_schema mode requires every key in `properties`
+    to appear in `required`, but Pydantic's model_json_schema() only lists
+    fields without a default -- Optional/defaulted fields used to be missing
+    from `required`, which still 400s even with additionalProperties fixed.
+    Covers both the top-level schema and a nested $defs model.
+    """
+    class Address(BaseModel):
+        city: str
+        zip_code: Optional[str] = None
+
+    class Person(BaseModel):
+        name: str
+        nickname: str = "N/A"
+        address: Optional[Address] = None
+
+    text_config = build_text_config(output_schema=Person)
+    schema = text_config["format"]["schema"]
+
+    assert set(schema["required"]) == set(schema["properties"].keys())
+    assert "nickname" in schema["required"]
+    assert "address" in schema["required"]
+
+    nested = schema["$defs"]["Address"]
+    assert set(nested["required"]) == set(nested["properties"].keys())
+    assert "zip_code" in nested["required"]
 
 
 def test_requires_pydantic_output_schema():

@@ -71,6 +71,64 @@ def test_circuit_breaker_trips_after_consecutive_failures():
         llm.invoke("hello")
 
 
+def test_circuit_breaker_trips_for_chat_and_achat():
+    """
+    Regression: chat()/achat() weren't in BaseLLM.__init_subclass__'s wrap
+    list, so failures via chat()/achat() never counted toward the circuit
+    breaker's consecutive-failure threshold, and an already-open circuit
+    didn't stop chat()/achat() from still hitting a known-down provider.
+    """
+    import asyncio
+
+    llm = _make_response(circuit_failure_threshold=2, circuit_cooldown_time=30.0)
+    llm._attempt_sync_create = MagicMock(side_effect=RuntimeError("boom"))
+
+    with pytest.raises(RuntimeError):
+        llm.chat([{"role": "user", "content": "hi"}])
+    with pytest.raises(RuntimeError):
+        llm.chat([{"role": "user", "content": "hi"}])
+
+    # Circuit should now be open for chat() too.
+    with pytest.raises(CircuitBreakerOpenException):
+        llm.chat([{"role": "user", "content": "hi"}])
+    # ...and for invoke() as well, since they share the same breaker state.
+    with pytest.raises(CircuitBreakerOpenException):
+        llm.invoke("hi")
+
+    llm2 = _make_response(circuit_failure_threshold=2, circuit_cooldown_time=30.0)
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    llm2._attempt_async_create = boom
+
+    async def run():
+        with pytest.raises(RuntimeError):
+            await llm2.achat([{"role": "user", "content": "hi"}])
+        with pytest.raises(RuntimeError):
+            await llm2.achat([{"role": "user", "content": "hi"}])
+        with pytest.raises(CircuitBreakerOpenException):
+            await llm2.achat([{"role": "user", "content": "hi"}])
+
+    asyncio.run(run())
+
+
+def test_config_error_max_retries_zero_or_negative():
+    """
+    Regression test: max_retries is used as range(1, max_retries + 1) in every
+    retry loop, so max_retries=0 made the loop never run at all -- the
+    non-stream path silently sent zero API calls while raising a misleading
+    "Unexpected retry exhaustion" error, and the stream path crashed with
+    TypeError ("exceptions must derive from BaseException") from `raise None`.
+    Since max_retries is the *total* attempt count (not retries after the
+    first), 0 attempts is nonsensical and is now rejected at construction.
+    """
+    with pytest.raises(OpenAIResponseConfigError, match="max_retries must be >= 1"):
+        _make_response(max_retries=0)
+    with pytest.raises(OpenAIResponseConfigError, match="max_retries must be >= 1"):
+        _make_response(max_retries=-1)
+
+
 def test_circuit_breaker_ignores_config_errors_as_non_transient():
     """
     Regression: a caller/config mistake (e.g. invoke_structured() with a
