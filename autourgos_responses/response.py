@@ -1,7 +1,10 @@
 """
 OpenAIResponse — LLM wrapper for the OpenAI Responses API.
 
-Self-contained: no autourgos-core dependency.
+Depends only on the `openai` SDK, `autourgos-openaichat` (whose shared
+BaseLLM/ledger/redaction/shadow machinery this package reuses directly),
+and `autourgos-core` (a separate, zero-dependency stdlib utility
+library shared across the framework).
 """
 
 from __future__ import annotations

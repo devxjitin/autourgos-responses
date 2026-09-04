@@ -44,11 +44,9 @@ from .model_runtime import (
     track_latency,
 )
 
-try:
-    from importlib.metadata import version as _v
-    __version__ = _v("autourgos-responses")
-except Exception:
-    __version__ = "2.4.0"
+from autourgos_core import package_version
+
+__version__ = package_version("autourgos-responses", fallback="2.5.0")
 
 __all__ = [
     # Main class
