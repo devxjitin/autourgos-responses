@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.5.2] - 2026-09-04
+
+- Internal: bumped `autourgos-openaichat>=2.6.2` (also fixes the hardcoded fallback string, stale at `"2.5.0"` since 2.5.1). `OpenAIResponse` extends `BaseProviderLLM`, so autourgos-openaichat 2.6.2's `retry_with_backoff()`/`aretry_with_backoff()` migration (`_attempt_sync_create`/`_attempt_async_create`) applies here automatically -- no code change needed in this package. Live-verified against real Azure.
+
 ## [2.5.1] - 2026-09-04
 
 - Internal: `__version__` resolution moved to `autourgos_core.package_version()` (new `autourgos-core>=0.3.0` dependency; also fixes the hardcoded fallback string, stale at `"2.4.0"` since 2.5.0). "No autourgos-core dependency" in `response.py`'s docstring referred to the old, since-removed v3 "typed vocabulary" `autourgos-core` package -- wording updated. No functional change.

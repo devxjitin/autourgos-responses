@@ -46,7 +46,7 @@ from .model_runtime import (
 
 from autourgos_core import package_version
 
-__version__ = package_version("autourgos-responses", fallback="2.5.0")
+__version__ = package_version("autourgos-responses", fallback="2.5.2")
 
 __all__ = [
     # Main class
