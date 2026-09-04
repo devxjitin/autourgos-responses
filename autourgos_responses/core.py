@@ -311,6 +311,67 @@ def build_responses_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return result
 
 
+def normalize_native_tool_calling_input(prompt: Any) -> Any:
+    """
+    Convert a Chat-Completions-shaped native-tool-calling message list into
+    the item shapes the Responses API's ``input`` array actually expects.
+
+    autourgos-agent's native tool-calling loop (``tool_calling_mode="native"``)
+    is provider-agnostic and builds ONE canonical message format -- the same
+    one Chat Completions (autourgos-openaichat) natively consumes:
+
+        {"role": "assistant", "tool_calls": [{"id", "type": "function",
+                                                "function": {"name", "arguments"}}]}
+        {"role": "tool", "tool_call_id": ..., "content": ...}
+
+    The Responses API has no such shapes at all -- it expects a flat
+    ``function_call``/``function_call_output`` item per tool call/result
+    instead of them being embedded in an "assistant"/"tool" message. Passed
+    straight through unconverted, every one of these messages is rejected
+    by the real API. This walks the list and rewrites exactly those two
+    patterns into the Responses API's equivalents; a plain
+    ``{"role": "user"/"system"/..., "content": ...}`` message (or anything
+    already Responses-API-shaped, e.g. a caller building its own
+    conversation directly against ``invoke_with_tools()``) passes through
+    unchanged, since those ARE already valid Responses API input items --
+    making this safe to apply unconditionally to any list-shaped prompt,
+    not just ones that came from autourgos-agent's native loop.
+
+    Non-list input (a plain string, or None) is returned unchanged.
+    """
+    if not isinstance(prompt, list):
+        return prompt
+
+    converted: List[Any] = []
+    for msg in prompt:
+        if not isinstance(msg, dict):
+            converted.append(msg)
+            continue
+
+        if msg.get("role") == "assistant" and "tool_calls" in msg:
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                converted.append({
+                    "type": "function_call",
+                    "call_id": tc.get("id"),
+                    "name": fn.get("name"),
+                    "arguments": fn.get("arguments", "{}"),
+                })
+            continue
+
+        if msg.get("role") == "tool":
+            converted.append({
+                "type": "function_call_output",
+                "call_id": msg.get("tool_call_id"),
+                "output": msg.get("content", ""),
+            })
+            continue
+
+        converted.append(msg)
+
+    return converted
+
+
 def extract_tool_calls_from_response(resp: Any) -> List[Dict[str, Any]]:
     """
     Extract raw tool-call dicts from a Responses API response.
@@ -419,4 +480,5 @@ __all__ = [
     "extract_final_response_from_stream_event",
     "build_responses_tools",
     "extract_tool_calls_from_response",
+    "normalize_native_tool_calling_input",
 ]

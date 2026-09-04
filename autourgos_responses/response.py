@@ -41,6 +41,7 @@ from .core import (
     load_openai_module,
     logger,
     normalize_model_name,
+    normalize_native_tool_calling_input,
     normalize_reasoning_effort,
     normalize_text_verbosity,
     release_async_openai_client,
@@ -968,7 +969,14 @@ class OpenAIResponse(BaseProviderLLM):
         """
         files = kwargs.pop("files", None)
         tool_choice = kwargs.pop("tool_choice", "auto")
-        resolved, redacted_categories, _redaction_map = self._resolve_prompt(prompt, None, files)
+        # autourgos-agent's native loop (and any other Chat-Completions-
+        # shaped caller) builds "assistant"+tool_calls / "role":"tool"
+        # messages -- the Responses API has no such shapes and rejects them
+        # outright. Convert BEFORE _resolve_prompt/redaction so both see
+        # the already-Responses-shaped list; a no-op for a plain string or
+        # an already-Responses-shaped list. See its docstring for detail.
+        prompt = normalize_native_tool_calling_input(prompt)
+        resolved, redacted_categories, redaction_map = self._resolve_prompt(prompt, None, files)
         self.last_redacted_categories = redacted_categories
         try:
             responses_tools = build_responses_tools(tools)
@@ -978,9 +986,10 @@ class OpenAIResponse(BaseProviderLLM):
         if responses_tools:
             params["tools"] = responses_tools
             params["tool_choice"] = tool_choice
-        raw, _provider_label, _provider_model, _provider_pricing = self._create_across_providers(params)
-        raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
-        if raw_calls:
+        with self._budget_admission():
+            with track_latency() as timing:
+                raw, provider_label, provider_model, provider_pricing = self._create_across_providers(params)
+            raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
             tool_calls = [
                 FunctionCall(
                     name=c["name"], arguments=c["arguments"], call_id=c["call_id"],
@@ -988,8 +997,26 @@ class OpenAIResponse(BaseProviderLLM):
                 )
                 for c in raw_calls
             ]
+            masked_text = extract_text_from_response(raw) if not tool_calls else None
+            text = restore_text(masked_text, redaction_map) if (
+                masked_text and self.redact_restore_in_response
+            ) else masked_text
+            metadata = build_structured_output(
+                model_name=provider_model,
+                response_text=masked_text,
+                raw_response=raw,
+                latency_ms=timing["latency_ms"],
+                input_pricing=provider_pricing[0],
+                output_pricing=provider_pricing[1],
+                extra_fields={"provider_used": provider_label},
+            )
+            self._record_session_cost(metadata.get("total_cost"))
+            self._log_to_ledger(
+                call_type="invoke_with_tools", prompt=resolved, metadata=metadata,
+                redacted_categories=redacted_categories, response_override=masked_text,
+            )
+        if tool_calls:
             return ToolCallResponse(tool_calls=tool_calls, raw=raw)
-        text = extract_text_from_response(raw)
         return ToolCallResponse(text=text, raw=raw)
 
     async def ainvoke_with_tools(
@@ -1001,7 +1028,9 @@ class OpenAIResponse(BaseProviderLLM):
         """Async version of invoke_with_tools()."""
         files = kwargs.pop("files", None)
         tool_choice = kwargs.pop("tool_choice", "auto")
-        resolved, redacted_categories, _redaction_map = self._resolve_prompt(prompt, None, files)
+        # See invoke_with_tools()'s identical comment.
+        prompt = normalize_native_tool_calling_input(prompt)
+        resolved, redacted_categories, redaction_map = self._resolve_prompt(prompt, None, files)
         self.last_redacted_categories = redacted_categories
         try:
             responses_tools = build_responses_tools(tools)
@@ -1011,9 +1040,10 @@ class OpenAIResponse(BaseProviderLLM):
         if responses_tools:
             params["tools"] = responses_tools
             params["tool_choice"] = tool_choice
-        raw, _provider_label, _provider_model, _provider_pricing = await self._acreate_across_providers(params)
-        raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
-        if raw_calls:
+        async with self._async_budget_admission():
+            with track_latency() as timing:
+                raw, provider_label, provider_model, provider_pricing = await self._acreate_across_providers(params)
+            raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
             tool_calls = [
                 FunctionCall(
                     name=c["name"], arguments=c["arguments"], call_id=c["call_id"],
@@ -1021,8 +1051,26 @@ class OpenAIResponse(BaseProviderLLM):
                 )
                 for c in raw_calls
             ]
+            masked_text = extract_text_from_response(raw) if not tool_calls else None
+            text = restore_text(masked_text, redaction_map) if (
+                masked_text and self.redact_restore_in_response
+            ) else masked_text
+            metadata = build_structured_output(
+                model_name=provider_model,
+                response_text=masked_text,
+                raw_response=raw,
+                latency_ms=timing["latency_ms"],
+                input_pricing=provider_pricing[0],
+                output_pricing=provider_pricing[1],
+                extra_fields={"provider_used": provider_label},
+            )
+            self._record_session_cost(metadata.get("total_cost"))
+            self._log_to_ledger(
+                call_type="ainvoke_with_tools", prompt=resolved, metadata=metadata,
+                redacted_categories=redacted_categories, response_override=masked_text,
+            )
+        if tool_calls:
             return ToolCallResponse(tool_calls=tool_calls, raw=raw)
-        text = extract_text_from_response(raw)
         return ToolCallResponse(text=text, raw=raw)
 
     # ── Repr ──────────────────────────────────────────────────────────────────

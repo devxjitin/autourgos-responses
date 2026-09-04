@@ -3,11 +3,13 @@ Tests for native tool/function calling ported from autourgos-openaichat,
 adapted to the Responses API's flat tool schema and function_call output items.
 """
 
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from autourgos_responses import OpenAIResponse
+from autourgos_responses import BudgetExceededException, OpenAIResponse
+from autourgos_responses.core import normalize_native_tool_calling_input
 from autourgos_responses.llm import FunctionCall
 from autourgos_responses.response import OpenAIResponseConfigError
 
@@ -138,3 +140,227 @@ def test_invoke_with_tools_rejects_empty_list_prompt():
     llm._create_across_providers = MagicMock(return_value=(_mock_final_answer_response(), "primary", llm._model_name, (None, None)))
     with pytest.raises(ValueError):
         llm.invoke_with_tools([], TOOLS)
+
+
+# -- normalize_native_tool_calling_input -----------------------------------------
+#
+# Regression: autourgos-agent's native tool-calling loop builds a canonical,
+# Chat-Completions-shaped message list ({"role": "assistant", "tool_calls":
+# [...]}, {"role": "tool", "tool_call_id", "content"}) for ANY LLM wrapper
+# implementing invoke_with_tools()/ainvoke_with_tools() -- it has no
+# knowledge of the Responses API's very different item shapes. Passed
+# straight through, the Responses API rejects these outright. This function
+# is what invoke_with_tools()/ainvoke_with_tools() now run every list-shaped
+# prompt through before sending it.
+
+def test_normalize_converts_assistant_tool_calls_message():
+    messages = [
+        {"role": "user", "content": "what's 2+3?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "add", "arguments": '{"a": 2, "b": 3}'}},
+            ],
+        },
+    ]
+    result = normalize_native_tool_calling_input(messages)
+
+    assert result[0] == {"role": "user", "content": "what's 2+3?"}
+    assert result[1] == {
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "add",
+        "arguments": '{"a": 2, "b": 3}',
+    }
+
+
+def test_normalize_converts_tool_role_message():
+    messages = [{"role": "tool", "tool_call_id": "call_1", "content": "5"}]
+    result = normalize_native_tool_calling_input(messages)
+
+    assert result == [{"type": "function_call_output", "call_id": "call_1", "output": "5"}]
+
+
+def test_normalize_converts_multiple_tool_calls_in_one_assistant_message():
+    """A single 'assistant' message can carry several concurrent tool
+    calls (autourgos-agent's native loop supports concurrent tool
+    execution in one turn) -- each must become its own function_call item."""
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "add", "arguments": "{}"}},
+                {"id": "c2", "type": "function", "function": {"name": "sub", "arguments": "{}"}},
+            ],
+        }
+    ]
+    result = normalize_native_tool_calling_input(messages)
+
+    assert len(result) == 2
+    assert result[0]["call_id"] == "c1" and result[0]["name"] == "add"
+    assert result[1]["call_id"] == "c2" and result[1]["name"] == "sub"
+
+
+def test_normalize_leaves_plain_messages_and_string_prompt_untouched():
+    assert normalize_native_tool_calling_input("plain string prompt") == "plain string prompt"
+    assert normalize_native_tool_calling_input(None) is None
+
+    plain = [{"role": "user", "content": "hi"}, {"role": "system", "content": "be nice"}]
+    assert normalize_native_tool_calling_input(plain) == plain
+
+
+def test_normalize_leaves_already_responses_shaped_items_untouched():
+    """A caller building its own Responses-API-native conversation directly
+    (bypassing autourgos-agent's native loop) must not have its already-
+    correct function_call/function_call_output items altered."""
+    already_native = [
+        {"type": "function_call", "call_id": "c1", "name": "add", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "5"},
+    ]
+    assert normalize_native_tool_calling_input(already_native) == already_native
+
+
+def test_invoke_with_tools_sends_responses_shaped_input_not_chat_completions_shaped():
+    """End-to-end: invoke_with_tools() itself must apply the conversion
+    before sending, not just the standalone function in isolation."""
+    llm = _make_response()
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_final_answer_response(), "primary", llm._model_name, (None, None))
+    )
+
+    messages = [
+        {"role": "user", "content": "what's 2+3?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "add", "arguments": '{"a": 2, "b": 3}'}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "5"},
+    ]
+    llm.invoke_with_tools(messages, TOOLS)
+
+    sent_input = llm._create_across_providers.call_args[0][0]["input"]
+    assert not any(
+        isinstance(item, dict) and (item.get("role") == "tool" or "tool_calls" in item)
+        for item in sent_input
+    )
+    assert any(isinstance(item, dict) and item.get("type") == "function_call" for item in sent_input)
+    assert any(isinstance(item, dict) and item.get("type") == "function_call_output" for item in sent_input)
+
+
+# ── Sprint 0 regression: invoke_with_tools()/ainvoke_with_tools() used to
+# bypass budget/ledger/redaction-restore entirely (native tool-calling mode
+# called _create_across_providers() directly, skipping the same machinery
+# invoke() goes through). ────────────────────────────────────────────────────
+
+def test_budget_governor_blocks_invoke_with_tools_once_cap_reached():
+    llm = _make_response(input_pricing=1_000_000.0, output_pricing=1_000_000.0, max_session_cost=10.0)
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_final_answer_response(), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing))
+    )
+    llm.invoke_with_tools("hi", TOOLS)  # 1st call costs $10 (input) + $5 (output) = $15, over the $10 cap
+    assert llm.session_cost_used > 0
+
+    with pytest.raises(BudgetExceededException):
+        llm.invoke_with_tools("hi again", TOOLS)
+    assert llm._create_across_providers.call_count == 1  # 2nd call never reached the API
+
+
+def test_budget_governor_blocks_ainvoke_with_tools_once_cap_reached():
+    llm = _make_response(input_pricing=1_000_000.0, output_pricing=1_000_000.0, max_session_cost=10.0)
+
+    async def fake_acreate(params):
+        return _mock_final_answer_response(), "primary", llm._model_name, (llm.input_pricing, llm.output_pricing)
+
+    llm._acreate_across_providers = fake_acreate
+
+    async def run():
+        await llm.ainvoke_with_tools("hi", TOOLS)
+        with pytest.raises(BudgetExceededException):
+            await llm.ainvoke_with_tools("hi again", TOOLS)
+
+    import asyncio
+    asyncio.run(run())
+
+
+def test_ledger_records_invoke_with_tools(tmp_path):
+    ledger_path = str(tmp_path / "ledger.db")
+    llm = _make_response(ledger_path=ledger_path)
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_final_answer_response("Paris is sunny."), "primary", llm._model_name, (None, None))
+    )
+    llm.invoke_with_tools("Weather in Paris?", TOOLS)
+
+    conn = sqlite3.connect(ledger_path)
+    rows = conn.execute("SELECT call_type, response FROM calls").fetchall()
+    conn.close()
+    assert rows == [("invoke_with_tools", "Paris is sunny.")]
+
+
+def test_ledger_records_ainvoke_with_tools(tmp_path):
+    ledger_path = str(tmp_path / "ledger.db")
+    llm = _make_response(ledger_path=ledger_path)
+
+    async def fake_acreate(params):
+        return _mock_final_answer_response("Berlin is cold."), "primary", llm._model_name, (None, None)
+
+    llm._acreate_across_providers = fake_acreate
+
+    async def run():
+        return await llm.ainvoke_with_tools("Weather in Berlin?", TOOLS)
+
+    import asyncio
+    asyncio.run(run())
+
+    conn = sqlite3.connect(ledger_path)
+    rows = conn.execute("SELECT call_type, response FROM calls").fetchall()
+    conn.close()
+    assert rows == [("ainvoke_with_tools", "Berlin is cold.")]
+
+
+def test_ledger_records_none_response_when_tool_called(tmp_path):
+    """When the model calls a tool (no final-answer text), the ledger's
+    response column should reflect that (None), not crash on it."""
+    ledger_path = str(tmp_path / "ledger.db")
+    llm = _make_response(ledger_path=ledger_path)
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_tool_call_response(), "primary", llm._model_name, (None, None))
+    )
+    llm.invoke_with_tools("Weather in Paris?", TOOLS)
+
+    conn = sqlite3.connect(ledger_path)
+    rows = conn.execute("SELECT call_type, response FROM calls").fetchall()
+    conn.close()
+    assert rows == [("invoke_with_tools", None)]
+
+
+def test_redact_restore_in_response_applies_to_invoke_with_tools():
+    """
+    Regression: invoke_with_tools() discarded its redaction_map entirely, so
+    redact_restore_in_response=True (working correctly in invoke()) silently
+    had no effect in native tool-calling mode -- the caller got back the
+    masked placeholder instead of the original text.
+    """
+    llm = _make_response(redact_pii=True, redact_restore_in_response=True)
+    llm._create_across_providers = MagicMock(
+        return_value=(_mock_final_answer_response("Sure, I'll email jane@example.com"), "primary", llm._model_name, (None, None))
+    )
+    result = llm.invoke_with_tools("contact jane@example.com please", TOOLS)
+    assert result.text == "Sure, I'll email jane@example.com"
+
+
+def test_redact_restore_in_response_applies_to_ainvoke_with_tools():
+    llm = _make_response(redact_pii=True, redact_restore_in_response=True)
+
+    async def fake_acreate(params):
+        return _mock_final_answer_response("Sure, I'll email jane@example.com"), "primary", llm._model_name, (None, None)
+
+    llm._acreate_across_providers = fake_acreate
+
+    async def run():
+        return await llm.ainvoke_with_tools("contact jane@example.com please", TOOLS)
+
+    import asyncio
+    result = asyncio.run(run())
+    assert result.text == "Sure, I'll email jane@example.com"
