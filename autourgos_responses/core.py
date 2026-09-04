@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Optional
 
 from autourgos_openaichat import enforce_additional_properties_false
 from autourgos_openaichat.core import (
+    _IMAGE_EXTENSION_MIME_TYPES,
+    _guess_image_mime_type,
     configure_async_openai_client,
     configure_openai_client,
     load_openai_module,
@@ -32,6 +34,9 @@ from autourgos_openaichat.core import (
     release_openai_client,
     resolve_api_key,
     resolve_base_url,
+)
+from autourgos_openaichat.core import (
+    strip_unsupported_sampling_params as _shared_strip_unsupported_sampling_params,
 )
 
 # Kept local (not re-exported): the logger name is package-specific, so
@@ -49,31 +54,11 @@ def strip_unsupported_sampling_params(params: Dict[str, Any], model_name: str) -
     """
     Drop ``temperature``/``top_p`` from ``params`` in place if ``model_name``
     is an o-series reasoning model -- those models reject both params
-    outright (400). Reuses ``model_requires_max_completion_tokens()`` from
-    autourgos-openaichat.core for the model-family detection (same o-series
-    regex, no need to duplicate it) but logs through this package's own
-    logger, kept local for the same reason as ``logger`` above.
-
-    Called at the same per-target sites as the model name is swapped in --
-    params are built once before it's known which target (primary/
-    fallback[i]/shadow[i]) will actually receive the request, and a
-    fallback/shadow can be a different model family than the primary.
-
-    Dropped rather than raised, so a caller with temperature/top_p set for a
-    non-reasoning primary (with an o-series fallback configured, say) doesn't
-    get a hard failure -- just a warning and the call proceeds without them.
+    outright (400). Shared implementation in autourgos-openaichat's
+    ``core.py``; passes this package's own logger so warnings are attributed
+    to autourgos-responses, not autourgos-openaichat.
     """
-    if not model_requires_max_completion_tokens(model_name):
-        return
-    for key in ("temperature", "top_p"):
-        if key in params:
-            del params[key]
-            logger.warning(
-                "%s doesn't support %r -- dropped from the request instead of "
-                "sending it and getting a 400 (o-series reasoning models reject "
-                "temperature/top_p entirely).",
-                model_name, key,
-            )
+    _shared_strip_unsupported_sampling_params(params, model_name, logger=logger)
 
 
 def normalize_reasoning_effort(effort: Optional[str]) -> Optional[str]:
@@ -158,38 +143,6 @@ def build_text_config(
 
 
 # ── Multi-modal prompt building ───────────────────────────────────────────────
-
-# The only image formats OpenAI vision (Chat Completions and Responses API
-# alike) actually supports -- everything else the provider will reject
-# regardless of what MIME type we send. Kept in sync with the identical
-# table in autourgos_openaichat.core (not imported from there, to avoid
-# entangling this package's image encoding with openaichat's beyond what's
-# already shared -- see that module's docstring for the full rationale).
-_IMAGE_EXTENSION_MIME_TYPES = {
-    "jpg": "image/jpeg", "jpeg": "image/jpeg",
-    "png": "image/png",
-    "gif": "image/gif",
-    "webp": "image/webp",
-}
-
-
-def _guess_image_mime_type(file_path: str, ext: str) -> str:
-    """
-    Map a file extension to its correct image MIME type for vision input.
-    See autourgos_openaichat.core._guess_image_mime_type for the full
-    rationale (same fix, mirrored here).
-    """
-    mime = _IMAGE_EXTENSION_MIME_TYPES.get(ext)
-    if mime is not None:
-        return mime
-    logger.warning(
-        "_encode_file_part: %r has extension %r, which isn't a recognized "
-        "image type (supported: png, jpg/jpeg, gif, webp). Sending as "
-        "image/%s anyway, but the provider will likely reject it.",
-        file_path, ext, ext,
-    )
-    return f"image/{ext}"
-
 
 def _encode_file_part(file: Any) -> Optional[Dict[str, Any]]:
     """Encode a file into a Responses API image input part."""

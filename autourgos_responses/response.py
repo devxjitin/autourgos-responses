@@ -13,13 +13,13 @@ import asyncio
 import time
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
-from .ledger import close_ledger
 from .llm import (
     _NON_RETRYABLE_STATUS_CODES,
     BaseProviderLLM,
     FunctionCall,
     NonTransientError,
     ToolCallResponse,
+    _OpenAIClientLifecycleMixin,
 )
 from .redaction import redact_value, restore_text
 from .model_runtime import (
@@ -36,8 +36,6 @@ from .core import (
     build_response_create_params,
     build_responses_tools,
     build_text_config,
-    configure_async_openai_client,
-    configure_openai_client,
     extract_final_response_from_stream_event,
     extract_text_delta_from_event,
     extract_tool_calls_from_response,
@@ -47,10 +45,6 @@ from .core import (
     normalize_native_tool_calling_input,
     normalize_reasoning_effort,
     normalize_text_verbosity,
-    release_async_openai_client,
-    release_openai_client,
-    resolve_api_key,
-    resolve_base_url,
     strip_unsupported_sampling_params,
 )
 
@@ -155,7 +149,7 @@ class OpenAIResponseDeadlineExceededError(OpenAIResponseAPIError):
 
 # ── Main class ────────────────────────────────────────────────────────────────
 
-class OpenAIResponse(BaseProviderLLM):
+class OpenAIResponse(_OpenAIClientLifecycleMixin, BaseProviderLLM):
     """
     LLM wrapper for the OpenAI Responses API (client.responses.create).
 
@@ -198,6 +192,12 @@ class OpenAIResponse(BaseProviderLLM):
         if response.has_tool_calls:
             print(response.tool_calls)
     """
+
+    _import_error_cls = OpenAIResponseImportError
+
+    @classmethod
+    def _get_openai_client_classes(cls):
+        return openai_cls, async_openai_cls, _OPENAI_AVAILABLE, _OPENAI_IMPORT_ERROR
 
     _config_error_cls = OpenAIResponseConfigError
     _deadline_exceeded_cls = OpenAIResponseDeadlineExceededError
@@ -453,147 +453,6 @@ class OpenAIResponse(BaseProviderLLM):
         self._client: Any = None
         self._async_client: Any = None
         self._init_clients()
-
-    # ── Client init ───────────────────────────────────────────────────────────
-
-    def _init_clients(self) -> None:
-        if not _OPENAI_AVAILABLE or openai_cls is None or async_openai_cls is None:
-            detail = f" Details: {_OPENAI_IMPORT_ERROR}" if _OPENAI_IMPORT_ERROR else ""
-            raise OpenAIResponseImportError(
-                "Failed to import openai SDK. Install it with: pip install openai" + detail
-            )
-        key = resolve_api_key(self.api_key)
-        url = resolve_base_url(self.base_url)
-        self._client = configure_openai_client(
-            openai_cls,
-            api_key=key,
-            base_url=url,
-            organization=self.organization,
-            project=self.project,
-            timeout=self.timeout,
-        )
-        self._async_client = configure_async_openai_client(
-            async_openai_cls,
-            api_key=key,
-            base_url=url,
-            organization=self.organization,
-            project=self.project,
-            timeout=self.timeout,
-        )
-
-    def _get_fallback_sync_client(self, index: int) -> Any:
-        """Lazily create and cache the sync client for fallback_providers[index]."""
-        if index not in self._fallback_sync_clients:
-            cfg = self.fallback_providers[index]
-            self._fallback_sync_clients[index] = configure_openai_client(
-                openai_cls,
-                api_key=resolve_api_key(cfg.get("api_key")),
-                base_url=resolve_base_url(cfg.get("base_url")),
-                organization=cfg.get("organization"),
-                project=cfg.get("project"),
-                timeout=self.timeout,
-            )
-        return self._fallback_sync_clients[index]
-
-    def _get_fallback_async_client(self, index: int) -> Any:
-        """Lazily create and cache the async client for fallback_providers[index]."""
-        if index not in self._fallback_async_clients:
-            cfg = self.fallback_providers[index]
-            self._fallback_async_clients[index] = configure_async_openai_client(
-                async_openai_cls,
-                api_key=resolve_api_key(cfg.get("api_key")),
-                base_url=resolve_base_url(cfg.get("base_url")),
-                organization=cfg.get("organization"),
-                project=cfg.get("project"),
-                timeout=self.timeout,
-            )
-        return self._fallback_async_clients[index]
-
-    def _get_shadow_sync_client(self, index: int) -> Any:
-        """Lazily create and cache the sync client for shadow_providers[index]."""
-        if index not in self._shadow_sync_clients:
-            cfg = self.shadow_providers[index]
-            self._shadow_sync_clients[index] = configure_openai_client(
-                openai_cls,
-                api_key=resolve_api_key(cfg.get("api_key")),
-                base_url=resolve_base_url(cfg.get("base_url")),
-                organization=cfg.get("organization"),
-                project=cfg.get("project"),
-                timeout=self.timeout,
-            )
-        return self._shadow_sync_clients[index]
-
-    def _get_shadow_async_client(self, index: int) -> Any:
-        """Lazily create and cache the async client for shadow_providers[index]."""
-        if index not in self._shadow_async_clients:
-            cfg = self.shadow_providers[index]
-            self._shadow_async_clients[index] = configure_async_openai_client(
-                async_openai_cls,
-                api_key=resolve_api_key(cfg.get("api_key")),
-                base_url=resolve_base_url(cfg.get("base_url")),
-                organization=cfg.get("organization"),
-                project=cfg.get("project"),
-                timeout=self.timeout,
-            )
-        return self._shadow_async_clients[index]
-
-    # ── Context managers ──────────────────────────────────────────────────────
-
-    def __enter__(self) -> "OpenAIResponse":
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        if self._client is not None:
-            release_openai_client(self._client)
-            self._client = None
-        for client in self._fallback_sync_clients.values():
-            release_openai_client(client)
-        self._fallback_sync_clients = {}
-        for client in self._shadow_sync_clients.values():
-            release_openai_client(client)
-        self._shadow_sync_clients = {}
-        close_ledger(self._ledger_conn)
-        self._ledger_conn = None
-
-    def close(self) -> None:
-        """
-        Release the underlying client(s) synchronously.
-
-        Equivalent to ``__exit__()`` — lets callers that hold this LLM via
-        composition (e.g. autourgos-agent's ``Agent``, whose context-manager
-        cleanup calls ``llm.close()``/``llm.aclose()`` if present) release
-        resources without needing to use ``with`` directly on this object.
-        """
-        self.__exit__()
-
-    async def aclose(self) -> None:
-        """Release the underlying client(s) asynchronously. Equivalent to ``__aexit__()``."""
-        await self.__aexit__()
-
-    async def __aenter__(self) -> "OpenAIResponse":
-        return self
-
-    async def __aexit__(self, *args: Any) -> None:
-        if self._async_client is not None:
-            await release_async_openai_client(self._async_client)
-            self._async_client = None
-        if self._client is not None:
-            release_openai_client(self._client)
-            self._client = None
-        for client in self._fallback_async_clients.values():
-            await release_async_openai_client(client)
-        self._fallback_async_clients = {}
-        for client in self._fallback_sync_clients.values():
-            release_openai_client(client)
-        self._fallback_sync_clients = {}
-        for client in self._shadow_async_clients.values():
-            await release_async_openai_client(client)
-        self._shadow_async_clients = {}
-        for client in self._shadow_sync_clients.values():
-            release_openai_client(client)
-        self._shadow_sync_clients = {}
-        close_ledger(self._ledger_conn)
-        self._ledger_conn = None
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

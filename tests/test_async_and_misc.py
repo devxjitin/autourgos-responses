@@ -3,6 +3,7 @@ Deeper coverage: async paths, redact-restore, ledger shadow table, extra_body,
 context-manager cleanup — for the features ported in this pass.
 """
 
+import asyncio
 import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -261,6 +262,55 @@ def test_context_manager_closes_ledger(tmp_path):
     with llm:
         pass
     assert llm._ledger_conn is None
+
+
+def test_sync_context_manager_closes_client():
+    llm = _make_response()
+    llm._client = MagicMock()
+    close_mock = llm._client.close
+    with llm as ctx:
+        assert ctx is llm
+    close_mock.assert_called_once()
+    assert llm._client is None
+
+
+def test_async_context_manager_closes_both_clients():
+    llm = _make_response()
+    llm._client = MagicMock()
+    llm._async_client = MagicMock()
+    llm._async_client.aclose = AsyncMock()
+    aclose_mock = llm._async_client.aclose
+
+    async def run():
+        async with llm as ctx:
+            return ctx
+
+    result = asyncio.run(run())
+    assert result is llm
+    aclose_mock.assert_called_once()
+    assert llm._client is None
+    assert llm._async_client is None
+
+
+def test_close_method_releases_sync_client_without_with_statement():
+    llm = _make_response()
+    llm._client = MagicMock()
+    close_mock = llm._client.close
+    llm.close()
+    close_mock.assert_called_once()
+    assert llm._client is None
+
+
+def test_aclose_method_releases_both_clients_without_async_with():
+    llm = _make_response()
+    llm._client = MagicMock()
+    llm._async_client = MagicMock()
+    llm._async_client.aclose = AsyncMock()
+    aclose_mock = llm._async_client.aclose
+    asyncio.run(llm.aclose())
+    aclose_mock.assert_called_once()
+    assert llm._client is None
+    assert llm._async_client is None
 
 
 def test_batch_invoke_runs_sequentially():

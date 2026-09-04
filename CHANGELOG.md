@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.5.6] - 2026-09-05
+
+- Internal: `OpenAIResponse` now mixes in `autourgos_openaichat.llm._OpenAIClientLifecycleMixin` instead of duplicating client-lifecycle code (`_init_clients`/lazy fallback+shadow client getters/`close`/`aclose`/context-manager dunders). Bumped `autourgos-openaichat>=2.6.5`. No behavior change -- live-verified sync `invoke`, `with`, and explicit `close()` against real Azure; added regression tests for `close()`/`aclose()`/context managers (previously untested by name in this package).
+
+## [2.5.5] - 2026-09-05
+
+- Internal: `build_structured_output()` no longer duplicates its payload-building body -- delegates to `autourgos_openaichat.model_runtime`'s shared implementation, binding this package's own `extract_usage_metadata` via the new `usage_fn=` keyword. Bumped `autourgos-openaichat>=2.6.4`. No behavior change.
+
+## [2.5.4] - 2026-09-05
+
+- Internal: `strip_unsupported_sampling_params()` no longer duplicates its body -- delegates to `autourgos_openaichat.core`'s shared implementation, passing this package's own logger via the new `logger=` keyword. Bumped `autourgos-openaichat>=2.6.3`. No behavior change, live-verified log attribution.
+
+## [2.5.3] - 2026-09-05
+
+- Internal: `_IMAGE_EXTENSION_MIME_TYPES`/`_guess_image_mime_type()` are no longer duplicated -- now imported from `autourgos_openaichat.core`, the canonical copy. Log messages from this path now say `_encode_file` instead of `_encode_file_part` (cosmetic wording only). No behavior change.
+
 ## [2.5.2] - 2026-09-04
 
 - Internal: bumped `autourgos-openaichat>=2.6.2` (also fixes the hardcoded fallback string, stale at `"2.5.0"` since 2.5.1). `OpenAIResponse` extends `BaseProviderLLM`, so autourgos-openaichat 2.6.2's `retry_with_backoff()`/`aretry_with_backoff()` migration (`_attempt_sync_create`/`_attempt_async_create`) applies here automatically -- no code change needed in this package. Live-verified against real Azure.

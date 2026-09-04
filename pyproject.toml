@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autourgos-responses"
-version = "2.5.2"
+version = "2.5.6"
 description = "Autourgos LLM wrapper for the OpenAI Responses API"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -35,7 +35,7 @@ classifiers = [
 ]
 dependencies = [
     "openai>=1.0.0",
-    "autourgos-openaichat>=2.6.2",
+    "autourgos-openaichat>=2.6.5",
     "autourgos-core>=0.6.0",
 ]
 

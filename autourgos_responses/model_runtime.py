@@ -21,6 +21,9 @@ from autourgos_openaichat.model_runtime import (
     extract_template_fields,
     track_latency,
 )
+from autourgos_openaichat.model_runtime import (
+    build_structured_output as _shared_build_structured_output,
+)
 
 # ── Token/usage extraction ────────────────────────────────────────────────────
 
@@ -65,29 +68,22 @@ def build_structured_output(
     output_pricing: Optional[float] = None,
     extra_fields: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Return a normalized dict with usage metadata and optional cost fields."""
-    usage = extract_usage_metadata(raw_response)
+    """Return a normalized dict with usage metadata and optional cost fields.
 
-    payload: Dict[str, Any] = {
-        "model": model_name,
-        "response": response_text,
-        "input_tokens": usage["input_tokens"],
-        "output_tokens": usage["output_tokens"],
-        "total_tokens": usage["total_tokens"],
-    }
-
-    if input_pricing is not None and usage["input_tokens"] is not None:
-        payload["input_cost"] = (usage["input_tokens"] / 1_000_000) * input_pricing
-    if output_pricing is not None and usage["output_tokens"] is not None:
-        payload["output_cost"] = (usage["output_tokens"] / 1_000_000) * output_pricing
-    if "input_cost" in payload and "output_cost" in payload:
-        payload["total_cost"] = payload["input_cost"] + payload["output_cost"]
-    if latency_ms is not None:
-        payload["latency_ms"] = latency_ms
-    if extra_fields:
-        payload.update(extra_fields)
-
-    return payload
+    Shared implementation in autourgos-openaichat's ``model_runtime.py``;
+    binds this package's own ``extract_usage_metadata`` (Responses-API field
+    layout) via ``usage_fn`` so payload-building logic isn't duplicated.
+    """
+    return _shared_build_structured_output(
+        model_name=model_name,
+        response_text=response_text,
+        raw_response=raw_response,
+        latency_ms=latency_ms,
+        input_pricing=input_pricing,
+        output_pricing=output_pricing,
+        extra_fields=extra_fields,
+        usage_fn=extract_usage_metadata,
+    )
 
 
 # ── Text extraction ───────────────────────────────────────────────────────────
