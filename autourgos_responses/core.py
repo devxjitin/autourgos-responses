@@ -23,12 +23,10 @@ from typing import Any, Dict, List, Optional
 
 from autourgos_openaichat import enforce_additional_properties_false
 from autourgos_openaichat.core import (
-    _IMAGE_EXTENSION_MIME_TYPES,
     _guess_image_mime_type,
     configure_async_openai_client,
     configure_openai_client,
     load_openai_module,
-    model_requires_max_completion_tokens,
     normalize_model_name,
     release_async_openai_client,
     release_openai_client,
@@ -301,8 +299,8 @@ def normalize_native_tool_calling_input(prompt: Any) -> Any:
             converted.append(msg)
             continue
 
-        if msg.get("role") == "assistant" and "tool_calls" in msg:
-            for tc in msg.get("tool_calls") or []:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
                 fn = tc.get("function") or {}
                 converted.append({
                     "type": "function_call",
@@ -310,6 +308,15 @@ def normalize_native_tool_calling_input(prompt: Any) -> Any:
                     "name": fn.get("name"),
                     "arguments": fn.get("arguments", "{}"),
                 })
+            continue
+
+        if msg.get("role") == "assistant" and "tool_calls" in msg:
+            # tool_calls present but empty/None -- callers (e.g. autourgos-
+            # agent's native loop) commonly include this key on every turn,
+            # defaulting to [] when no tool ran. It's not an actual
+            # tool-calling turn: pass the message through as plain content
+            # instead of silently dropping it.
+            converted.append({k: v for k, v in msg.items() if k != "tool_calls"})
             continue
 
         if msg.get("role") == "tool":

@@ -21,7 +21,7 @@ from autourgos_openaichat import (
     NonTransientError,
     ToolCallResponse,
 )
-from autourgos_openaichat.llm import _NON_RETRYABLE_STATUS_CODES, _OpenAIClientLifecycleMixin
+from autourgos_openaichat.llm import _OpenAIClientLifecycleMixin
 
 __all__ = [
     "BaseLLM",
@@ -31,4 +31,5 @@ __all__ = [
     "CircuitBreakerOpenException",
     "BudgetExceededException",
     "NonTransientError",
+    "_OpenAIClientLifecycleMixin",
 ]

@@ -10,7 +10,7 @@ TypeError: invoke() got an unexpected keyword argument.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

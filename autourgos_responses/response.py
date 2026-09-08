@@ -10,11 +10,9 @@ library shared across the framework).
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
 from .llm import (
-    _NON_RETRYABLE_STATUS_CODES,
     BaseProviderLLM,
     FunctionCall,
     NonTransientError,
@@ -808,6 +806,83 @@ class OpenAIResponse(_OpenAIClientLifecycleMixin, BaseProviderLLM):
 
     # ── Native function-calling ───────────────────────────────────────────────
 
+    def _prepare_tool_call_request(
+        self, prompt: Any, tools: List[Dict[str, Any]], kwargs: Dict[str, Any]
+    ) -> tuple:
+        """Shared setup for invoke_with_tools()/ainvoke_with_tools(): resolve the
+        prompt, redact it, and build the request params. Returns (resolved,
+        redacted_categories, redaction_map, params, responses_tools)."""
+        files = kwargs.pop("files", None)
+        tool_choice = kwargs.pop("tool_choice", "auto")
+        # autourgos-agent's native loop (and any other Chat-Completions-
+        # shaped caller) builds "assistant"+tool_calls / "role":"tool"
+        # messages -- the Responses API has no such shapes and rejects them
+        # outright. Convert BEFORE _resolve_prompt/redaction so both see
+        # the already-Responses-shaped list; a no-op for a plain string or
+        # an already-Responses-shaped list. See its docstring for detail.
+        prompt = normalize_native_tool_calling_input(prompt)
+        resolved, redacted_categories, redaction_map = self._resolve_prompt(prompt, None, files)
+        self.last_redacted_categories = redacted_categories
+        try:
+            responses_tools = build_responses_tools(tools)
+        except ValueError as exc:
+            raise OpenAIResponseConfigError(str(exc)) from exc
+        params = self._build_base_params(input_data=resolved, stream=False, overrides=kwargs)
+        if responses_tools:
+            params["tools"] = responses_tools
+            params["tool_choice"] = tool_choice
+        return resolved, redacted_categories, redaction_map, params, responses_tools
+
+    def _finalize_tool_call_response(
+        self,
+        *,
+        raw: Any,
+        provider_label: str,
+        provider_model: str,
+        provider_pricing: tuple,
+        timing: Dict[str, Any],
+        responses_tools: List[Dict[str, Any]],
+        resolved: Any,
+        redacted_categories: List[str],
+        redaction_map: Any,
+        call_type: str,
+    ) -> ToolCallResponse:
+        """Shared post-processing for invoke_with_tools()/ainvoke_with_tools():
+        extract tool calls/text, log to the ledger, and build the result."""
+        raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
+        tool_calls = [
+            FunctionCall(
+                name=c["name"], arguments=c["arguments"], call_id=c["call_id"],
+                arguments_parse_error=c.get("arguments_parse_error"),
+            )
+            for c in raw_calls
+        ]
+        masked_text = extract_text_from_response(raw) if not tool_calls else None
+        text = restore_text(masked_text, redaction_map) if (
+            masked_text and self.redact_restore_in_response
+        ) else masked_text
+        metadata = build_structured_output(
+            model_name=provider_model,
+            response_text=masked_text,
+            raw_response=raw,
+            latency_ms=timing["latency_ms"],
+            input_pricing=provider_pricing[0],
+            output_pricing=provider_pricing[1],
+            extra_fields={"provider_used": provider_label},
+        )
+        self._record_session_cost(metadata.get("total_cost"))
+        self._log_to_ledger(
+            call_type=call_type, prompt=resolved, metadata=metadata,
+            redacted_categories=redacted_categories, response_override=masked_text,
+        )
+        if tool_calls:
+            return ToolCallResponse(tool_calls=tool_calls, raw=raw)
+        if not text:
+            raise OpenAIResponseResponseError(
+                "Responses API response had neither tool calls nor extractable text."
+            )
+        return ToolCallResponse(text=text, raw=raw)
+
     def invoke_with_tools(
         self,
         prompt: Any,
@@ -829,57 +904,18 @@ class OpenAIResponse(_OpenAIClientLifecycleMixin, BaseProviderLLM):
             ToolCallResponse with tool_calls (if the model called tools)
             or text (if the model gave a final answer).
         """
-        files = kwargs.pop("files", None)
-        tool_choice = kwargs.pop("tool_choice", "auto")
-        # autourgos-agent's native loop (and any other Chat-Completions-
-        # shaped caller) builds "assistant"+tool_calls / "role":"tool"
-        # messages -- the Responses API has no such shapes and rejects them
-        # outright. Convert BEFORE _resolve_prompt/redaction so both see
-        # the already-Responses-shaped list; a no-op for a plain string or
-        # an already-Responses-shaped list. See its docstring for detail.
-        prompt = normalize_native_tool_calling_input(prompt)
-        resolved, redacted_categories, redaction_map = self._resolve_prompt(prompt, None, files)
-        self.last_redacted_categories = redacted_categories
-        try:
-            responses_tools = build_responses_tools(tools)
-        except ValueError as exc:
-            raise OpenAIResponseConfigError(str(exc)) from exc
-        params = self._build_base_params(input_data=resolved, stream=False, overrides=kwargs)
-        if responses_tools:
-            params["tools"] = responses_tools
-            params["tool_choice"] = tool_choice
+        resolved, redacted_categories, redaction_map, params, responses_tools = (
+            self._prepare_tool_call_request(prompt, tools, kwargs)
+        )
         with self._budget_admission():
             with track_latency() as timing:
                 raw, provider_label, provider_model, provider_pricing = self._create_across_providers(params)
-            raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
-            tool_calls = [
-                FunctionCall(
-                    name=c["name"], arguments=c["arguments"], call_id=c["call_id"],
-                    arguments_parse_error=c.get("arguments_parse_error"),
-                )
-                for c in raw_calls
-            ]
-            masked_text = extract_text_from_response(raw) if not tool_calls else None
-            text = restore_text(masked_text, redaction_map) if (
-                masked_text and self.redact_restore_in_response
-            ) else masked_text
-            metadata = build_structured_output(
-                model_name=provider_model,
-                response_text=masked_text,
-                raw_response=raw,
-                latency_ms=timing["latency_ms"],
-                input_pricing=provider_pricing[0],
-                output_pricing=provider_pricing[1],
-                extra_fields={"provider_used": provider_label},
+            return self._finalize_tool_call_response(
+                raw=raw, provider_label=provider_label, provider_model=provider_model,
+                provider_pricing=provider_pricing, timing=timing, responses_tools=responses_tools,
+                resolved=resolved, redacted_categories=redacted_categories, redaction_map=redaction_map,
+                call_type="invoke_with_tools",
             )
-            self._record_session_cost(metadata.get("total_cost"))
-            self._log_to_ledger(
-                call_type="invoke_with_tools", prompt=resolved, metadata=metadata,
-                redacted_categories=redacted_categories, response_override=masked_text,
-            )
-        if tool_calls:
-            return ToolCallResponse(tool_calls=tool_calls, raw=raw)
-        return ToolCallResponse(text=text, raw=raw)
 
     async def ainvoke_with_tools(
         self,
@@ -888,52 +924,18 @@ class OpenAIResponse(_OpenAIClientLifecycleMixin, BaseProviderLLM):
         **kwargs: Any,
     ) -> ToolCallResponse:
         """Async version of invoke_with_tools()."""
-        files = kwargs.pop("files", None)
-        tool_choice = kwargs.pop("tool_choice", "auto")
-        # See invoke_with_tools()'s identical comment.
-        prompt = normalize_native_tool_calling_input(prompt)
-        resolved, redacted_categories, redaction_map = self._resolve_prompt(prompt, None, files)
-        self.last_redacted_categories = redacted_categories
-        try:
-            responses_tools = build_responses_tools(tools)
-        except ValueError as exc:
-            raise OpenAIResponseConfigError(str(exc)) from exc
-        params = self._build_base_params(input_data=resolved, stream=False, overrides=kwargs)
-        if responses_tools:
-            params["tools"] = responses_tools
-            params["tool_choice"] = tool_choice
+        resolved, redacted_categories, redaction_map, params, responses_tools = (
+            self._prepare_tool_call_request(prompt, tools, kwargs)
+        )
         async with self._async_budget_admission():
             with track_latency() as timing:
                 raw, provider_label, provider_model, provider_pricing = await self._acreate_across_providers(params)
-            raw_calls = extract_tool_calls_from_response(raw) if responses_tools else []
-            tool_calls = [
-                FunctionCall(
-                    name=c["name"], arguments=c["arguments"], call_id=c["call_id"],
-                    arguments_parse_error=c.get("arguments_parse_error"),
-                )
-                for c in raw_calls
-            ]
-            masked_text = extract_text_from_response(raw) if not tool_calls else None
-            text = restore_text(masked_text, redaction_map) if (
-                masked_text and self.redact_restore_in_response
-            ) else masked_text
-            metadata = build_structured_output(
-                model_name=provider_model,
-                response_text=masked_text,
-                raw_response=raw,
-                latency_ms=timing["latency_ms"],
-                input_pricing=provider_pricing[0],
-                output_pricing=provider_pricing[1],
-                extra_fields={"provider_used": provider_label},
+            return self._finalize_tool_call_response(
+                raw=raw, provider_label=provider_label, provider_model=provider_model,
+                provider_pricing=provider_pricing, timing=timing, responses_tools=responses_tools,
+                resolved=resolved, redacted_categories=redacted_categories, redaction_map=redaction_map,
+                call_type="ainvoke_with_tools",
             )
-            self._record_session_cost(metadata.get("total_cost"))
-            self._log_to_ledger(
-                call_type="ainvoke_with_tools", prompt=resolved, metadata=metadata,
-                redacted_categories=redacted_categories, response_override=masked_text,
-            )
-        if tool_calls:
-            return ToolCallResponse(tool_calls=tool_calls, raw=raw)
-        return ToolCallResponse(text=text, raw=raw)
 
     # ── Repr ──────────────────────────────────────────────────────────────────
 
