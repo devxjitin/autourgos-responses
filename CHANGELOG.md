@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.6.0] - 2026-09-09
+
+- **Fixed:** `normalize_native_tool_calling_input()` silently dropped an assistant turn whose `tool_calls` list was empty/`None` (including any `content` it also carried) -- callers like autourgos-agent's native loop commonly include this key defaulting to `[]` on every turn with no tool call. Now passed through as a plain content message instead.
+- **Fixed:** `invoke_with_tools()`/`ainvoke_with_tools()` returned an ambiguous empty `ToolCallResponse(text=None)` instead of raising when a response had neither tool calls nor extractable text, unlike `invoke()`/`ainvoke()`'s existing guard -- now raises `OpenAIResponseResponseError` the same way.
+- Internal: extracted `_prepare_tool_call_request()`/`_finalize_tool_call_response()` shared by `invoke_with_tools()`/`ainvoke_with_tools()`, which were ~45 lines of near-identical sync/async duplication. No behavior change.
+
 ## [2.5.6] - 2026-09-05
 
 - Internal: `OpenAIResponse` now mixes in `autourgos_openaichat.llm._OpenAIClientLifecycleMixin` instead of duplicating client-lifecycle code (`_init_clients`/lazy fallback+shadow client getters/`close`/`aclose`/context-manager dunders). Bumped `autourgos-openaichat>=2.6.5`. No behavior change -- live-verified sync `invoke`, `with`, and explicit `close()` against real Azure; added regression tests for `close()`/`aclose()`/context managers (previously untested by name in this package).
